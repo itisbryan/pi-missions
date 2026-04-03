@@ -1,0 +1,21 @@
+{
+  "name": "pi-mission",
+  "version": "0.1.0",
+  "description": "Orchestrated multi-phase development missions for pi — architect, implement, test, audit, verify",
+  "keywords": ["pi-package"],
+  "license": "MIT",
+  "author": "itisbryan",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/itisbryan/pi-mission"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*",
+    "@sinclair/typebox": "*"
+  },
+  "pi": {
+    "extensions": ["./extensions"],
+    "prompts": ["./prompts"]
+  }
+}
