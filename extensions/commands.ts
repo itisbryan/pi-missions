@@ -10,7 +10,7 @@ import type { MissionState } from "./types.ts";
 import type { MissionControlCallbacks, MissionControlResult } from "./mission-control.ts";
 import { saveMissionState, addProgressEvent } from "./state.ts";
 import { formatDuration, getPhaseIcon, getFeatureIcon } from "./utils.ts";
-import { DEFAULT_SIMPLE_PHASES } from "./config.ts";
+// config.ts exports are used via planner.ts at runtime
 import { runMissionPlanner } from "./planner.ts";
 import { updateWidget as updateMissionWidget } from "./widget.ts";
 

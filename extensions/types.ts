@@ -1,11 +1,5 @@
 // extensions/types.ts — TypeScript interfaces for pi-mission extension
 
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-  ExtensionCommandContext,
-} from "@mariozechner/pi-coding-agent";
-
 // ---------------------------------------------------------------------------
 // Type Aliases
 // ---------------------------------------------------------------------------

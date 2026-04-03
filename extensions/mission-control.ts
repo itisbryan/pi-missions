@@ -4,7 +4,6 @@ import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type {
   MissionState,
   MissionFeature,
-  MissionPhase,
   ValidationAssertion,
 } from "./types.ts";
 import { formatDuration, getFeatureIcon, getPhaseIcon, truncate } from "./utils.ts";

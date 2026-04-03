@@ -6,10 +6,6 @@
 
 import type {
   MissionState,
-  MissionPhase,
-  MissionMilestone,
-  MissionFeature,
-  ValidationAssertion,
   AutonomyLevel,
 } from "./types.ts";
 import {
