@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1
+
+### Fixed
+- Package name updated to `pi-missions` (plural) to match GitHub repo
+- Added npm and local path install methods to README
+- Added demo.svg showcasing Mission Control, phases, modes, and validation
+- Added demo image to README header
+
 ## 0.2.0
 
 Complete rewrite — Factory.ai-inspired mission orchestration system.
