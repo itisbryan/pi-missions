@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "declaration": false,
+    "outDir": "./dist",
+    "rootDir": ".",
+    "paths": {
+      "@mariozechner/pi-coding-agent": ["./node_modules/@mariozechner/pi-coding-agent"],
+      "@mariozechner/pi-tui": ["./node_modules/@mariozechner/pi-tui"],
+      "@sinclair/typebox": ["./node_modules/@sinclair/typebox"]
+    }
+  },
+  "include": ["extensions/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}
