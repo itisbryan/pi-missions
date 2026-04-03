@@ -1,32 +1,51 @@
 {
   "name": "pi-mission",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Orchestrated multi-phase development missions for pi — architect, implement, test, audit, verify",
-  "keywords": [
-    "pi-package"
-  ],
+  "keywords": ["pi-package", "pi", "coding-agent", "missions", "orchestration"],
+  "type": "module",
+  "scripts": {
+    "lint": "eslint . && tsc --noEmit",
+    "lint:fix": "eslint . --fix",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run lint && npm run test"
+  },
   "license": "MIT",
   "author": "itisbryan",
   "repository": {
     "type": "git",
-    "url": "https://github.com/itisbryan/pi-mission"
+    "url": "https://github.com/itisbryan/pi-missions.git"
+  },
+  "homepage": "https://github.com/itisbryan/pi-missions#readme",
+  "bugs": {
+    "url": "https://github.com/itisbryan/pi-missions/issues"
+  },
+  "files": ["extensions", "prompts", "README.md"],
+  "pi": {
+    "extensions": ["./extensions"],
+    "prompts": ["./prompts"]
   },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",
     "@mariozechner/pi-tui": "*",
     "@sinclair/typebox": "*"
   },
-  "pi": {
-    "extensions": [
-      "./extensions"
-    ],
-    "prompts": [
-      "./prompts"
-    ]
+  "peerDependenciesMeta": {
+    "@mariozechner/pi-coding-agent": { "optional": true },
+    "@mariozechner/pi-tui": { "optional": true },
+    "@sinclair/typebox": { "optional": true }
   },
   "devDependencies": {
+    "@mariozechner/pi-coding-agent": "^0.64.0",
+    "@mariozechner/pi-tui": "^0.64.0",
     "@sinclair/typebox": "^0.34.49",
-    "@types/node": "^25.5.0",
-    "typescript": "^6.0.2"
+    "@types/node": "^22.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.57.2",
+    "@typescript-eslint/parser": "^8.57.2",
+    "eslint": "^10.1.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.2"
   }
 }
