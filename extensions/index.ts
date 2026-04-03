@@ -1,103 +1,83 @@
 /**
- * pi-mission — Orchestrated multi-phase development missions
+ * pi-mission — Factory-style orchestrated multi-phase development missions
  *
- * Provides:
- *   /mission <description>   Start a new mission
- *   /mission                 Show quick status
- *   /mission-status          Detailed phase-by-phase status
- *   /mission-skip            Skip current phase
- *   /mission-done            Mark mission complete
- *   /mission-reset           Clear mission and widget
+ * Thin orchestrator that wires together the factored modules:
+ *   state.ts     — Persistence, phase/feature advancement, progress logging
+ *   widget.ts    — Compact always-visible progress widget
+ *   detector.ts  — LLM output pattern matching for transitions
+ *   protocol.ts  — System prompt injection (mission protocol + live status)
+ *   commands.ts  — All /mission* slash command registrations
+ *   utils.ts     — Shared helpers (text extraction, formatting)
  *
- * Widget shows real-time progress bar and current phase.
- * System prompt is augmented with mission protocol while active.
- * State persists in the session — survives /compact and restarts.
+ * Commands (registered via commands.ts):
+ *   /mission <desc>    Start a new mission
+ *   /mission           Show quick status
+ *   /mission-status    Detailed phase-by-phase status
+ *   /mission-skip      Skip current phase
+ *   /mission-done      Mark mission complete
+ *   /mission-pause     Pause the mission
+ *   /mission-resume    Resume a paused mission
+ *   /mission-reset     Clear mission and widget
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { MissionState } from "./types.ts";
+import { restoreMissionState, saveMissionState, advancePhase, advanceFeature, addProgressEvent } from "./state.ts";
+import { updateWidget } from "./widget.ts";
+import { detectPhaseTransition, detectFeatureTransition, detectMilestoneTransition, detectAssertionResult } from "./detector.ts";
+import { buildMissionProtocol, buildMissionStatus } from "./protocol.ts";
+import { extractTextFromMessage } from "./utils.ts";
+import { registerMissionCommands } from "./commands.ts";
+import { PHASE_ROLE_MAP } from "./config.ts";
+import { registerMissionTools } from "./tools.ts";
 
 // ---------------------------------------------------------------------------
-// Types
+// Model auto-switching helper
 // ---------------------------------------------------------------------------
 
-interface MissionPhase {
-  name: string;
-  emoji: string;
-  status: "pending" | "active" | "done" | "skipped";
-  startedAt?: number;
-  completedAt?: number;
+/**
+ * Switch to the assigned model for the current phase role, if configured.
+ * Looks up the active phase name → role (via PHASE_ROLE_MAP) → model ID
+ * (via state.modelAssignment), then finds the matching model in the registry.
+ */
+async function maybeSwitchModel(
+  pi: ExtensionAPI,
+  state: MissionState,
+  ctx: { modelRegistry: { getAll(): Array<{ id: string }> } },
+): Promise<void> {
+  if (Object.keys(state.modelAssignment).length === 0) return;
+
+  let targetModelId: string | undefined;
+
+  if (state.mode === "full") {
+    // Full mode: use "coder" role during feature execution, "verifier" when all done
+    const role = state.completedAt ? "verifier" : "coder";
+    targetModelId = state.modelAssignment[role];
+  } else {
+    // Simple/minimal mode: determine role from active phase
+    const activePhase = state.phases.find((p) => p.status === "active");
+    if (!activePhase) return;
+    const role = PHASE_ROLE_MAP[activePhase.name];
+    if (!role) return;
+    targetModelId = state.modelAssignment[role];
+  }
+
+  if (!targetModelId) return;
+
+  // Find matching model in registry
+  const allModels = ctx.modelRegistry.getAll();
+  const model = allModels.find(
+    (m) => m.id === targetModelId || m.id.includes(targetModelId),
+  );
+
+  if (model) {
+    try {
+      await pi.setModel(model as any);
+    } catch {
+      // Model switch failed — continue with current model
+    }
+  }
 }
-
-interface MissionState {
-  description: string;
-  currentPhase: number;
-  phases: MissionPhase[];
-  startedAt: number;
-  completedAt?: number;
-}
-
-// ---------------------------------------------------------------------------
-// Default phases — can be overridden per-project via prompts/mission.md args
-// ---------------------------------------------------------------------------
-
-const DEFAULT_PHASES: Omit<MissionPhase, "status">[] = [
-  { name: "Architect", emoji: "📐" },
-  { name: "Review Plan", emoji: "👁️" },
-  { name: "Implement", emoji: "🔨" },
-  { name: "Test", emoji: "🧪" },
-  { name: "Audit", emoji: "🔍" },
-  { name: "Verify", emoji: "✅" },
-];
-
-// ---------------------------------------------------------------------------
-// Mission protocol injected into the system prompt
-// ---------------------------------------------------------------------------
-
-const MISSION_PROTOCOL = `
-## Active Mission Protocol
-
-You are running an orchestrated mission. Follow these phases strictly:
-
-### Phase 1: Architect
-- Analyze the codebase and understand the domain
-- Produce a detailed implementation plan with file assignments
-- List all files to create/modify with clear descriptions
-- **STOP and present the plan for approval before proceeding**
-
-### Phase 2: Review Plan
-- Present the plan clearly to the user
-- Wait for explicit approval (user says "approve", "go", "lgtm", etc.)
-- If the user requests changes, revise the plan and re-present
-- Do NOT proceed to implementation without approval
-
-### Phase 3: Implement
-- Execute the plan. Run independent tasks in parallel when possible
-- Use subagents or parallel tool calls for concurrent work
-- Follow the project's architecture patterns and code style
-- Commit work incrementally
-
-### Phase 4: Test
-- Write tests for all new/changed code
-- Cover edge cases, error conditions, and boundary values
-- Run the test suite and fix any failures
-
-### Phase 5: Audit
-- Review all changes for:
-  - Bugs and logic errors
-  - Security issues
-  - Performance concerns
-  - Code style violations
-  - Missing error handling
-- Fix any issues found
-
-### Phase 6: Verify
-- Run the full test suite and linter
-- Ensure all tests pass and no lint errors
-- Report the final status
-
-**After completing each phase, announce it clearly** so the mission tracker can update.
-Use phrases like "Phase 1 (Architect) complete" or "Moving to Phase 3 (Implement)".
-`;
 
 // ---------------------------------------------------------------------------
 // Extension entry point
@@ -106,100 +86,170 @@ Use phrases like "Phase 1 (Architect) complete" or "Moving to Phase 3 (Implement
 export default function missionExtension(pi: ExtensionAPI) {
   let mission: MissionState | null = null;
 
+  const getState = () => mission;
+  const setState = (s: MissionState | null) => { mission = s; };
+
   // -------------------------------------------------------------------
-  // Session lifecycle — restore persisted state
+  // Session lifecycle — restore persisted state on any session change
   // -------------------------------------------------------------------
 
-  pi.on("session_start", async (_event, ctx) => {
-    mission = null;
-    for (const entry of ctx.sessionManager.getEntries()) {
-      if (entry.type === "custom" && entry.customType === "mission-state") {
-        mission = entry.data as MissionState;
+  /** Shared restore logic for all session lifecycle events. */
+  function restoreFromSession(ctx: Pick<ExtensionContext, "ui" | "sessionManager">, source: string): void {
+    try {
+      mission = restoreMissionState(ctx.sessionManager.getEntries());
+      if (mission && !mission.completedAt) {
+        updateWidget(ctx, mission);
+        pi.setSessionName(`🎯 ${mission.description}`);
+      } else if (mission && mission.completedAt) {
+        updateWidget(ctx, mission); // Show completed widget briefly
+        pi.setSessionName(`✅ ${mission.description}`);
+      } else {
+        updateWidget(ctx, null);
       }
+    } catch (err) {
+      console.error(`[pi-mission] ${source} failed:`, err);
     }
-    if (mission && !mission.completedAt) {
-      updateWidget(ctx);
-    }
-  });
+  }
+
+  pi.on("session_start", async (_event, ctx) => restoreFromSession(ctx, "session_start"));
+  pi.on("session_switch", async (_event, ctx) => restoreFromSession(ctx, "session_switch"));
+  pi.on("session_fork", async (_event, ctx) => restoreFromSession(ctx, "session_fork"));
+  pi.on("session_tree", async (_event, ctx) => restoreFromSession(ctx, "session_tree"));
+  pi.on("session_compact", async (_event, ctx) => restoreFromSession(ctx, "session_compact"));
 
   // -------------------------------------------------------------------
-  // Auto-detect phase transitions from LLM output
+  // Auto-detect phase/feature transitions from LLM output
+  // Note: Mission state survives compaction because appendEntry creates
+  // custom entries (type: "custom") which are preserved in the session
+  // tree. The before_agent_start handler re-injects the protocol each turn.
   // -------------------------------------------------------------------
 
   pi.on("message_end", async (event, ctx) => {
-    if (!mission || mission.completedAt) return;
-    if (event.message.role !== "assistant") return;
+    try {
+      if (!mission || mission.completedAt || mission.paused) return;
+      if (event.message.role !== "assistant") return;
 
-    const text =
-      event.message.content
-        ?.filter((c: { type: string }) => c.type === "text")
-        .map((c: { type: string; text: string }) => c.text)
-        .join(" ")
-        .toLowerCase() ?? "";
+      const text = extractTextFromMessage(event.message);
+      if (!text) return;
 
-    for (let i = 0; i < mission.phases.length; i++) {
-      const phase = mission.phases[i];
-      const phaseName = phase.name.toLowerCase();
-      const phaseNum = i + 1;
+      let updated = false;
 
-      const completionPatterns = [
-        `phase ${phaseNum} complete`,
-        `phase ${phaseNum} done`,
-        `phase ${phaseNum} (${phaseName}) complete`,
-        `${phaseName} complete`,
-        `${phaseName} phase complete`,
-        `${phaseName} phase done`,
-        `completed phase ${phaseNum}`,
-        `completed the ${phaseName} phase`,
-      ];
+      if (mission.mode === "simple" || mission.mode === "minimal") {
+        // --- Simple/Minimal: phase-based detection ---
+        const activeIdx = mission.phases.findIndex((p) => p.status === "active");
+        const result = detectPhaseTransition(text, mission.phases, activeIdx);
 
-      const transitionPatterns = [
-        `moving to phase ${phaseNum}`,
-        `starting phase ${phaseNum}`,
-        `proceeding to phase ${phaseNum}`,
-        `beginning ${phaseName}`,
-        `starting ${phaseName}`,
-        `now entering phase ${phaseNum}`,
-      ];
+        if (result) {
+          if (result.type === "complete") {
+            const phaseName = mission.phases[result.phaseIndex].name;
+            mission = advancePhase(mission);
+            addProgressEvent(mission, "phase_complete", `Completed phase: ${phaseName}`);
+            // Log the next phase starting, or mission complete
+            if (mission.completedAt) {
+              addProgressEvent(mission, "mission_complete", "All phases complete — mission finished");
+            } else {
+              const nextActive = mission.phases.find((p) => p.status === "active");
+              if (nextActive) {
+                addProgressEvent(mission, "phase_start", `Starting phase: ${nextActive.name}`);
+              }
+            }
+          } else {
+            // Transition: LLM announced moving to phase N — advance from current
+            mission = advancePhase(mission);
+            const newActive = mission.phases.find((p) => p.status === "active");
+            if (newActive) {
+              addProgressEvent(mission, "phase_start", `Advancing to phase: ${newActive.name}`);
+            } else if (mission.completedAt) {
+              addProgressEvent(mission, "mission_complete", "All phases complete — mission finished");
+            }
+          }
+          updated = true;
+        }
+      } else {
+        // --- Full mode: feature + milestone detection ---
+        const allFeatures = mission.milestones?.flatMap((m) => m.features) ?? [];
+        const featureResult = detectFeatureTransition(text, allFeatures);
 
-      // Phase completion
-      if (completionPatterns.some((p) => text.includes(p)) && phase.status === "active") {
-        phase.status = "done";
-        phase.completedAt = Date.now();
-
-        if (i + 1 < mission.phases.length) {
-          mission.currentPhase = i + 1;
-          mission.phases[i + 1].status = "active";
-          mission.phases[i + 1].startedAt = Date.now();
-        } else {
-          mission.completedAt = Date.now();
+        if (featureResult) {
+          if (featureResult.type === "complete") {
+            mission = advanceFeature(mission);
+            addProgressEvent(mission, "feature_complete", `Completed feature: ${featureResult.featureId}`);
+            if (mission.completedAt) {
+              addProgressEvent(mission, "mission_complete", "All features complete — mission finished");
+            }
+          } else if (featureResult.type === "start") {
+            addProgressEvent(mission, "feature_start", `Starting feature: ${featureResult.featureId}`);
+          } else if (featureResult.type === "failed") {
+            addProgressEvent(mission, "feature_failed", `Feature failed: ${featureResult.featureId}`);
+          }
+          updated = true;
         }
 
-        saveMissionState();
-        updateWidget(ctx);
-        break;
-      }
-
-      // Phase transition
-      if (
-        transitionPatterns.some((p) => text.includes(p)) &&
-        phase.status === "pending" &&
-        i > 0
-      ) {
-        const prev = mission.phases[i - 1];
-        if (prev.status === "active") {
-          prev.status = "done";
-          prev.completedAt = Date.now();
+        if (!updated && mission.milestones) {
+          const msResult = detectMilestoneTransition(text, mission.milestones);
+          if (msResult) {
+            const msName = mission.milestones[msResult.milestoneIndex]?.name ?? `#${msResult.milestoneIndex + 1}`;
+            if (msResult.type === "complete") {
+              addProgressEvent(mission, "milestone_complete", `Completed milestone: ${msName}`);
+            } else if (msResult.type === "start") {
+              addProgressEvent(mission, "milestone_start", `Starting milestone: ${msName}`);
+            }
+            updated = true;
+          }
         }
 
-        phase.status = "active";
-        phase.startedAt = Date.now();
-        mission.currentPhase = i;
+        // --- Spec approval detection (full mode) ---
+        if (mission.mode === "full" && !mission.specApproved && !updated) {
+          const approvalPatterns = [
+            /plan\s+approved/,
+            /spec\s+approved/,
+            /specification\s+approved/,
+            /proceeding\s+(?:to|with)\s+implementation/,
+            /moving\s+to\s+implementation/,
+            /beginning\s+implementation/,
+            /starting\s+implementation/,
+          ];
+          if (approvalPatterns.some((p) => p.test(text))) {
+            mission = { ...mission, specApproved: true };
+            addProgressEvent(mission, "phase_complete", "Spec approved — entering implementation");
+            updated = true;
+          }
+        }
 
-        saveMissionState();
-        updateWidget(ctx);
-        break;
+        // --- Validation assertion detection ---
+        if (mission.validationAssertions && mission.validationAssertions.length > 0) {
+          const assertionResult = detectAssertionResult(text, mission.validationAssertions);
+          if (assertionResult) {
+            const assertion = mission.validationAssertions.find(
+              (a) => a.id === assertionResult.assertionId,
+            );
+            if (assertion) {
+              assertion.status = assertionResult.type;
+              addProgressEvent(
+                mission,
+                assertionResult.type === "passed" ? "feature_complete" : "feature_failed",
+                `Assertion ${assertion.id}: ${assertionResult.type}`,
+              );
+              updated = true;
+            }
+          }
+        }
       }
+
+      if (updated) {
+        saveMissionState(pi, mission);
+        updateWidget(ctx, mission);
+
+        // Update session name if mission completed via auto-detection
+        if (mission.completedAt) {
+          pi.setSessionName(`✅ ${mission.description}`);
+        }
+
+        // Auto-switch model if assignment exists for the new phase/role
+        await maybeSwitchModel(pi, mission, ctx);
+      }
+    } catch (err) {
+      console.error("[pi-mission] message_end failed:", err);
     }
   });
 
@@ -208,255 +258,34 @@ export default function missionExtension(pi: ExtensionAPI) {
   // -------------------------------------------------------------------
 
   pi.on("before_agent_start", async (event, _ctx) => {
-    if (!mission || mission.completedAt) return;
+    try {
+      if (!mission || mission.completedAt) return;
 
-    const currentPhase = mission.phases[mission.currentPhase];
-    const phaseStatus = mission.phases
-      .map((p, i) => {
-        const icon =
-          p.status === "done" ? "✅" : p.status === "active" ? "🔄" : "⬜";
-        return `${icon} Phase ${i + 1}: ${p.name}`;
-      })
-      .join("\n");
+      const protocol = buildMissionProtocol(mission);
+      const status = buildMissionStatus(mission);
 
-    return {
-      systemPrompt:
-        event.systemPrompt +
-        MISSION_PROTOCOL +
-        `\n\n### Current Mission Status\n` +
-        `Mission: ${mission.description}\n` +
-        `Current Phase: ${mission.currentPhase + 1} (${currentPhase.name})\n\n` +
-        `${phaseStatus}\n`,
-    };
-  });
-
-  // -------------------------------------------------------------------
-  // Commands
-  // -------------------------------------------------------------------
-
-  pi.registerCommand("mission", {
-    description: "Run a full orchestrated mission — architect, implement, test, audit, verify",
-    handler: async (args, ctx) => {
-      const description = args.trim();
-
-      if (!description) {
-        if (mission && !mission.completedAt) {
-          const phase = mission.phases[mission.currentPhase];
-          ctx.ui.notify(
-            `Active: ${mission.description}\n` +
-            `Phase ${mission.currentPhase + 1}/${mission.phases.length}: ${phase.emoji} ${phase.name}`,
-            "info",
-          );
-          return;
-        }
-        ctx.ui.notify("Usage: /mission <description of what to build/fix>", "warning");
-        return;
-      }
-
-      // Confirm overwrite if a mission is active
-      if (mission && !mission.completedAt) {
-        const ok = await ctx.ui.confirm(
-          "Active Mission",
-          `There's already an active mission:\n"${mission.description}"\n\nStart a new one?`,
-        );
-        if (!ok) return;
-      }
-
-      // Initialize
-      mission = {
-        description,
-        currentPhase: 0,
-        phases: DEFAULT_PHASES.map((p) => ({ ...p, status: "pending" as const })),
-        startedAt: Date.now(),
+      return {
+        systemPrompt:
+          event.systemPrompt +
+          "\n\n---\n\n" +
+          protocol +
+          "\n\n" +
+          status,
       };
-      mission.phases[0].status = "active";
-      mission.phases[0].startedAt = Date.now();
-
-      saveMissionState();
-      updateWidget(ctx);
-
-      pi.sendUserMessage(
-        `Run an orchestrated mission for: ${description}\n\n` +
-        `Start with Phase 1 (Architect): Analyze the codebase and produce a detailed ` +
-        `implementation plan. Present the plan for my approval before implementing.`,
-      );
-
-      ctx.ui.notify(`🚀 Mission started: ${description}`, "info");
-    },
-  });
-
-  pi.registerCommand("mission-status", {
-    description: "Show detailed mission status with phase durations",
-    handler: async (_args, ctx) => {
-      if (!mission) {
-        ctx.ui.notify("No active mission. Use /mission <description> to start one.", "info");
-        return;
-      }
-
-      const elapsed = formatDuration(Date.now() - mission.startedAt);
-      const lines = [
-        `Mission: ${mission.description}`,
-        `Started: ${elapsed} ago`,
-        ...(mission.completedAt
-          ? [`Completed: ${formatDuration(Date.now() - mission.completedAt)} ago`]
-          : []),
-        "",
-        ...mission.phases.map((p, i) => {
-          const icon =
-            p.status === "done"
-              ? "✅"
-              : p.status === "active"
-                ? "🔄"
-                : p.status === "skipped"
-                  ? "⏭️"
-                  : "⬜";
-          const dur =
-            p.startedAt && p.completedAt
-              ? ` (${formatDuration(p.completedAt - p.startedAt)})`
-              : p.startedAt
-                ? ` (${formatDuration(Date.now() - p.startedAt)} elapsed)`
-                : "";
-          return `${icon} Phase ${i + 1}: ${p.emoji} ${p.name}${dur}`;
-        }),
-      ].filter(Boolean);
-
-      await ctx.ui.select("Mission Status", lines);
-    },
-  });
-
-  pi.registerCommand("mission-skip", {
-    description: "Skip the current mission phase",
-    handler: async (_args, ctx) => {
-      if (!mission || mission.completedAt) {
-        ctx.ui.notify("No active mission phase to skip.", "warning");
-        return;
-      }
-
-      const current = mission.phases[mission.currentPhase];
-      const ok = await ctx.ui.confirm("Skip Phase", `Skip "${current.name}" phase?`);
-      if (!ok) return;
-
-      current.status = "skipped";
-      current.completedAt = Date.now();
-
-      if (mission.currentPhase + 1 < mission.phases.length) {
-        mission.currentPhase++;
-        mission.phases[mission.currentPhase].status = "active";
-        mission.phases[mission.currentPhase].startedAt = Date.now();
-      } else {
-        mission.completedAt = Date.now();
-      }
-
-      saveMissionState();
-      updateWidget(ctx);
-
-      const nextPhase = mission.phases[mission.currentPhase];
-      ctx.ui.notify(
-        mission.completedAt
-          ? "🎉 Mission complete!"
-          : `Skipped → Phase ${mission.currentPhase + 1}: ${nextPhase.emoji} ${nextPhase.name}`,
-        "info",
-      );
-    },
-  });
-
-  pi.registerCommand("mission-done", {
-    description: "Mark the current mission as complete",
-    handler: async (_args, ctx) => {
-      if (!mission) {
-        ctx.ui.notify("No active mission.", "warning");
-        return;
-      }
-      if (mission.completedAt) {
-        ctx.ui.notify("Mission already completed.", "info");
-        return;
-      }
-
-      const ok = await ctx.ui.confirm("Complete Mission", "Mark mission as done?");
-      if (!ok) return;
-
-      for (const phase of mission.phases) {
-        if (phase.status === "active") {
-          phase.status = "done";
-          phase.completedAt = Date.now();
-        } else if (phase.status === "pending") {
-          phase.status = "skipped";
-        }
-      }
-
-      mission.completedAt = Date.now();
-      saveMissionState();
-      updateWidget(ctx);
-
-      ctx.ui.notify(`🎉 Mission complete! (${formatDuration(Date.now() - mission.startedAt)})`, "info");
-    },
-  });
-
-  pi.registerCommand("mission-reset", {
-    description: "Clear mission state and widget",
-    handler: async (_args, ctx) => {
-      if (!mission) {
-        ctx.ui.notify("No mission to reset.", "info");
-        return;
-      }
-
-      const ok = await ctx.ui.confirm("Reset Mission", "Clear all mission state?");
-      if (!ok) return;
-
-      mission = null;
-      ctx.ui.setWidget("mission", undefined);
-      ctx.ui.notify("Mission cleared.", "info");
-    },
+    } catch (err) {
+      console.error("[pi-mission] before_agent_start failed:", err);
+    }
   });
 
   // -------------------------------------------------------------------
-  // Helpers
+  // Register all /mission* commands
   // -------------------------------------------------------------------
 
-  function saveMissionState() {
-    if (mission) {
-      pi.appendEntry("mission-state", { ...mission });
-    }
-  }
+  registerMissionCommands(pi, getState, setState);
 
-  function updateWidget(ctx: Pick<ExtensionContext, "ui">) {
-    if (!mission) {
-      ctx.ui.setWidget("mission", undefined);
-      return;
-    }
+  // -------------------------------------------------------------------
+  // Register mission management tool (for full mode feature population)
+  // -------------------------------------------------------------------
 
-    if (mission.completedAt) {
-      const elapsed = formatDuration(mission.completedAt - mission.startedAt);
-      ctx.ui.setWidget("mission", [`🎉 Mission complete (${elapsed}): ${mission.description}`]);
-      setTimeout(() => ctx.ui.setWidget("mission", undefined), 30_000);
-      return;
-    }
-
-    const done = mission.phases.filter((p) => p.status === "done").length;
-    const total = mission.phases.length;
-    const bar = mission.phases
-      .map((p) =>
-        p.status === "done" ? "█" : p.status === "active" ? "▓" : "░",
-      )
-      .join("");
-
-    const current = mission.phases[mission.currentPhase];
-    ctx.ui.setWidget("mission", [
-      `🎯 ${mission.description}`,
-      `${bar} ${current.emoji} Phase ${mission.currentPhase + 1}/${total}: ${current.name} (${done}/${total} done)`,
-    ]);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Utilities
-// ---------------------------------------------------------------------------
-
-function formatDuration(ms: number): string {
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ${s % 60}s`;
-  const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
+  registerMissionTools(pi, getState, setState);
 }
