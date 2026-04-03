@@ -1,5 +1,0 @@
-commands:
-  typecheck: npx tsc --noEmit
-  build: echo "No build step needed — TypeScript-only library"
-
-services: {}
