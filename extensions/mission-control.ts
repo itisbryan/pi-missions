@@ -8,6 +8,7 @@ import type {
 } from "./types.ts";
 import { formatDuration, getFeatureIcon, getPhaseIcon, truncate } from "./utils.ts";
 import { formatProgressLog } from "./progress-log.ts";
+import { showModelPicker } from "./model-picker.ts";
 
 // ---------------------------------------------------------------------------
 // Public Types
@@ -472,26 +473,21 @@ async function showModelAssignment(
 
   if (!choice || choice === "← Back") return false;
 
-  // Extract role from choice
+  // Extract role from choice and show searchable model picker
   const role = choice.replace("✏️ Change: ", "");
   const availableModels = callbacks.getAvailableModels!();
-  const modelLabels = availableModels.map((m) => m.label);
+  const modelOptions = [
+    { label: "(current model)", id: "" },
+    ...availableModels,
+  ];
 
-  const picked = await ctx.ui.select(`Model for "${role}"`, [
-    "(current model)",
-    ...modelLabels,
-  ]);
+  const picked = await showModelPicker(ctx, `Model for "${role}"`, modelOptions);
 
-  if (!picked || picked === "(current model)") return false;
+  if (!picked || !picked.id) return false;
 
-  const matched = availableModels.find((m) => m.label === picked);
-  if (matched && matched.id) {
-    callbacks.onModelChange!(role, matched.id);
-    ctx.ui.notify(`🤖 ${role} → ${matched.label}`, "info");
-    return true;
-  }
-
-  return false;
+  callbacks.onModelChange!(role, picked.id);
+  ctx.ui.notify(`🤖 ${role} → ${picked.label}`, "info");
+  return true;
 }
 
 /**

@@ -15,6 +15,7 @@ import {
   MISSION_TEMPLATES,
   PHASE_ROLE_MAP,
 } from "./config.ts";
+import { getAvailableModelOptions, showModelPicker } from "./model-picker.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -33,45 +34,7 @@ const AUTONOMY_OPTIONS: { label: string; value: AutonomyLevel }[] = [
   { label: "High — Run to completion, only pause on errors", value: "high" },
 ];
 
-/**
- * Build a model list dynamically from the model registry.
- * Falls back to a static list if registry isn't accessible.
- */
-/** Model entry with display label and underlying ID for storage. */
-interface ModelOption {
-  label: string;
-  id: string;
-}
-
-/**
- * Build a model list dynamically from the model registry.
- * Returns label→id pairs so the planner stores IDs (not display names)
- * for reliable matching in maybeSwitchModel.
- */
-function getAvailableModelOptions(ctx: ExtensionCommandContext): ModelOption[] {
-  try {
-    const allModels = ctx.modelRegistry.getAll();
-    if (allModels.length > 0) {
-      return [
-        { label: "(current model)", id: "" },
-        ...allModels.map((m: any) => ({
-          label: `${m.name ?? m.id}`,
-          id: m.id as string,
-        })),
-      ];
-    }
-  } catch {
-    // Registry not available — fall back
-  }
-  return [
-    { label: "(current model)", id: "" },
-    { label: "claude-sonnet-4", id: "claude-sonnet-4" },
-    { label: "claude-sonnet-4-5", id: "claude-sonnet-4-5" },
-    { label: "claude-haiku-4-5", id: "claude-haiku-4-5" },
-    { label: "gpt-4o", id: "gpt-4o" },
-    { label: "gpt-4o-mini", id: "gpt-4o-mini" },
-  ];
-}
+// Model helpers moved to model-picker.ts (getAvailableModelOptions, showModelPicker)
 
 /** Get a template by key */
 function getTemplate(key: string): MissionTemplate {
@@ -150,14 +113,10 @@ export async function runMissionPlanner(
 
     for (const role of roles) {
       const modelOptions = getAvailableModelOptions(ctx);
-      const modelLabels = modelOptions.map((o) => o.label);
-      const chosen = await ctx.ui.select(`Model for "${role}"`, modelLabels);
+      const picked = await showModelPicker(ctx, `Model for "${role}"`, modelOptions);
       // Skip cancelled selections — use current model (empty = default)
-      if (chosen && chosen !== "(current model)") {
-        const matched = modelOptions.find((o) => o.label === chosen);
-        if (matched && matched.id) {
-          modelAssignment[role] = matched.id; // Store the model ID, not display name
-        }
+      if (picked && picked.id) {
+        modelAssignment[role] = picked.id;
       }
     }
   }
