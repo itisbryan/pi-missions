@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   formatDuration,
   getPhaseIcon,
-  getFeatureIcon,
   extractTextFromMessage,
   truncate,
   generateId,
@@ -43,19 +42,6 @@ describe("getPhaseIcon", () => {
   it("maps failed → ❌", () => expect(getPhaseIcon("failed")).toBe("❌"));
   it("maps pending → ⬜ (default)", () => expect(getPhaseIcon("pending")).toBe("⬜"));
   it("maps unknown → ⬜ (default)", () => expect(getPhaseIcon("unknown")).toBe("⬜"));
-});
-
-// ---------------------------------------------------------------------------
-// getFeatureIcon
-// ---------------------------------------------------------------------------
-
-describe("getFeatureIcon", () => {
-  it("maps done → ✓", () => expect(getFeatureIcon("done")).toBe("✓"));
-  it("maps active → ●", () => expect(getFeatureIcon("active")).toBe("●"));
-  it("maps failed → ✗", () => expect(getFeatureIcon("failed")).toBe("✗"));
-  it("maps cancelled → ⊘", () => expect(getFeatureIcon("cancelled")).toBe("⊘"));
-  it("maps pending → ○ (default)", () => expect(getFeatureIcon("pending")).toBe("○"));
-  it("maps unknown → ○ (default)", () => expect(getFeatureIcon("xyz")).toBe("○"));
 });
 
 // ---------------------------------------------------------------------------

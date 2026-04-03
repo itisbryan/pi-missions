@@ -2,7 +2,6 @@
 
 import type {
   AutonomyLevel,
-  MilestoneTemplate,
   MissionTemplate,
   PhaseRole,
   PhaseTemplate,
@@ -106,29 +105,6 @@ export const DEFAULT_MINIMAL_PHASES: PhaseTemplate[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// Milestone templates (full Factory-style mode)
-// ---------------------------------------------------------------------------
-
-/** Template milestones for full mode — features are filled during planning */
-export const DEFAULT_FULL_MILESTONES: MilestoneTemplate[] = [
-  {
-    name: "Foundation",
-    description: "Core types, schemas, and shared utilities",
-    features: [],
-  },
-  {
-    name: "Implementation",
-    description: "Primary feature work and integrations",
-    features: [],
-  },
-  {
-    name: "Validation",
-    description: "Testing, audit, and final verification",
-    features: [],
-  },
-];
-
-// ---------------------------------------------------------------------------
 // Mission templates
 // ---------------------------------------------------------------------------
 
@@ -138,12 +114,6 @@ export const MISSION_TEMPLATES: Record<string, MissionTemplate> = {
     description: "6-phase linear mission: architect, review, implement, test, audit, verify",
     mode: "simple",
     phases: DEFAULT_SIMPLE_PHASES,
-  },
-  full: {
-    name: "Full",
-    description: "Milestone-based Factory-style orchestration with feature decomposition",
-    mode: "full",
-    milestones: DEFAULT_FULL_MILESTONES,
   },
   minimal: {
     name: "Minimal",

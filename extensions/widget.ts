@@ -4,7 +4,6 @@ import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type {
   MissionState,
   MissionPhase,
-  MissionMilestone,
 } from "./types.ts";
 import { formatDuration, truncate } from "./utils.ts";
 
@@ -38,34 +37,6 @@ export function buildProgressBar(phases: MissionPhase[]): string {
       }
     })
     .join("");
-}
-
-/**
- * Build a feature progress bar from milestones.
- * Counts total and done features across all milestones, renders proportional bar.
- */
-export function buildFeatureProgressBar(
-  milestones: MissionMilestone[]
-): string {
-  let total = 0;
-  let done = 0;
-
-  for (const ms of milestones) {
-    for (const f of ms.features) {
-      total++;
-      if (f.status === "done") done++;
-    }
-  }
-
-  if (total === 0) return "░";
-
-  // Render a bar of fixed width (10 chars), proportional fill
-  const barWidth = 10;
-  const filled = Math.round((done / total) * barWidth);
-  const active = filled < barWidth ? 1 : 0;
-  const empty = barWidth - filled - active;
-
-  return "█".repeat(filled) + "▓".repeat(active) + "░".repeat(empty);
 }
 
 // ---------------------------------------------------------------------------
@@ -149,15 +120,7 @@ export function updateWidget(
     return;
   }
 
-  // --- Simple / Minimal mode ---
-  if (state.mode === "simple" || state.mode === "minimal") {
-    const lines = buildSimpleWidget(state);
-    ctx.ui.setWidget("mission", lines);
-    return;
-  }
-
-  // --- Full mode ---
-  const lines = buildFullWidget(state);
+  const lines = buildSimpleWidget(state);
   ctx.ui.setWidget("mission", lines);
 }
 
@@ -182,34 +145,4 @@ function buildSimpleWidget(state: MissionState): string[] {
   return [`🎯 ${desc}`, `${bar} ${phaseLabel}`];
 }
 
-function buildFullWidget(state: MissionState): string[] {
-  const milestones = state.milestones ?? [];
 
-  // Count features
-  let totalFeatures = 0;
-  let doneFeatures = 0;
-  for (const ms of milestones) {
-    for (const f of ms.features) {
-      totalFeatures++;
-      if (f.status === "done") doneFeatures++;
-    }
-  }
-
-  const bar = buildFeatureProgressBar(milestones);
-  const statusLine = `● Running  ${bar}  ${doneFeatures}/${totalFeatures} features`;
-
-  // Build detail line
-  const desc = truncate(state.description, 40);
-  const parts: string[] = [`🎯 ${desc}`];
-
-  if (state.currentMilestone) {
-    parts.push(`Milestone: ${truncate(state.currentMilestone, 20)}`);
-  }
-  if (state.currentFeature) {
-    parts.push(`Feature: ${truncate(state.currentFeature, 20)}`);
-  }
-
-  const detailLine = parts.join(" · ");
-
-  return [statusLine, detailLine];
-}

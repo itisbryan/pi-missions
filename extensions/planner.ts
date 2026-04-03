@@ -3,7 +3,6 @@
 import type { ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 import type {
   AutonomyLevel,
-  MissionMode,
   MissionPhase,
   MissionState,
   MissionTemplate,
@@ -21,16 +20,15 @@ import { getAvailableModelOptions, showModelPicker } from "./model-picker.ts";
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Map user-facing mode label → template key + MissionMode */
-const MODE_OPTIONS: { label: string; key: string; mode: MissionMode }[] = [
-  { label: "Standard (6 phases: Architect → Verify)", key: "standard", mode: "simple" },
-  { label: "Full (milestones + features, Factory-style)", key: "full", mode: "full" },
-  { label: "Minimal (3 phases: Plan → Build → Verify)", key: "minimal", mode: "simple" },
+/** Map user-facing mode label → template key */
+const MODE_OPTIONS: { label: string; key: string }[] = [
+  { label: "Standard (6 phases: Architect → Verify)", key: "standard" },
+  { label: "Minimal (3 phases: Plan → Build → Verify)", key: "minimal" },
 ];
 
 const AUTONOMY_OPTIONS: { label: string; value: AutonomyLevel }[] = [
   { label: "Low — Pause after each feature for review", value: "low" },
-  { label: "Medium — Pause after each milestone", value: "medium" },
+  { label: "Medium — Pause at phase boundaries and decision points", value: "medium" },
   { label: "High — Run to completion, only pause on errors", value: "high" },
 ];
 
@@ -90,7 +88,8 @@ export async function runMissionPlanner(
 
   const selected = MODE_OPTIONS.find((o) => o.label === modeChoice)!;
   const templateKey = selected.key;
-  const mode = selected.mode;
+  const template = getTemplate(templateKey);
+  const mode = template.mode;
 
   // ── Step 2: Autonomy level ──────────────────────────────────────────────
   const autonomyLabels = AUTONOMY_OPTIONS.map((o) => o.label);
@@ -131,7 +130,6 @@ export async function runMissionPlanner(
   // ── Step 5: Build MissionState ──────────────────────────────────────────
   const now = new Date().toISOString();
   const phases = buildPhases(templateKey);
-  const template = getTemplate(templateKey);
 
   const initialEvent: ProgressEvent = {
     timestamp: now,
@@ -152,26 +150,11 @@ export async function runMissionPlanner(
     phases,
 
     // Full-mode fields (populated later during planning phase)
-    ...(mode === "full"
-      ? {
-          milestones: template.milestones?.map((m) => ({
-            name: m.name,
-            description: m.description,
-            features: [],
-            status: "pending" as const,
-          })) ?? [],
-          currentMilestone: undefined,
-          currentFeature: undefined,
-          validationAssertions: [],
-        }
-      : {}),
-
     // Shared fields
     autonomy,
     modelAssignment,
     paused: false,
     pauseHistory: [],
-    specApproved: false,
     progressLog: [initialEvent],
     startedAt: now,
   };
