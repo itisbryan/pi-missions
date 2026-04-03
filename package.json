@@ -1,5 +1,5 @@
 {
-  "name": "pi-mission",
+  "name": "pi-missions",
   "version": "0.2.0",
   "description": "Orchestrated multi-phase development missions for pi — architect, implement, test, audit, verify",
   "keywords": [

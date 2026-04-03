@@ -6,6 +6,8 @@
 
 **[Install](#install)** · **[Usage](#usage)** · **[How it works](#how-it-works)** · **[Modes](#modes)**
 
+![pi-mission demo](demo.svg)
+
 </div>
 
 Run structured, multi-phase development missions inside [pi](https://github.com/badlogic/pi). Describe your goal, approve the plan, and let the orchestration layer track progress through milestones, features, and validation — with a real-time Mission Control overlay.
@@ -16,11 +18,27 @@ Inspired by [Factory.ai Missions](https://factory.ai/news/missions).
 
 ## Install
 
+From npm:
+
+```bash
+pi install npm:pi-missions
+```
+
+From GitHub:
+
 ```bash
 pi install git:github.com/itisbryan/pi-missions
 ```
 
-Then `/reload` in pi.
+From a local checkout:
+
+```bash
+pi install /path/to/pi-missions
+```
+
+If pi is already running, use `/reload` to pick up the new extension.
+
+Requires Pi v0.64.0+.
 
 ## Usage
 
