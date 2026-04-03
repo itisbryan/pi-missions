@@ -12,9 +12,14 @@ import type {
 import {
   DEFAULT_AUTONOMY,
   MISSION_TEMPLATES,
-  PHASE_ROLE_MAP,
 } from "./config.ts";
-import { getAvailableModelOptions, showModelPicker } from "./model-picker.ts";
+import { getAvailableModelOptions } from "./model-picker.ts";
+import {
+  loadModelDefaults,
+  saveModelDefaults,
+  showRoleModelAssigner,
+  validateDefaults,
+} from "./role-assigner.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -27,29 +32,14 @@ const MODE_OPTIONS: { label: string; key: string }[] = [
 ];
 
 const AUTONOMY_OPTIONS: { label: string; value: AutonomyLevel }[] = [
-  { label: "Low — Pause after each feature for review", value: "low" },
+  { label: "Low — Pause after each phase for review", value: "low" },
   { label: "Medium — Pause at phase boundaries and decision points", value: "medium" },
   { label: "High — Run to completion, only pause on errors", value: "high" },
 ];
 
-// Model helpers moved to model-picker.ts (getAvailableModelOptions, showModelPicker)
-
 /** Get a template by key */
 function getTemplate(key: string): MissionTemplate {
   return MISSION_TEMPLATES[key];
-}
-
-/** Extract unique phase roles from the selected template's phases */
-function getPhaseRoles(templateKey: string): string[] {
-  const template = getTemplate(templateKey);
-  if (!template.phases) return [];
-
-  const roles = new Set<string>();
-  for (const phase of template.phases) {
-    const role = PHASE_ROLE_MAP[phase.name];
-    if (role) roles.add(role);
-  }
-  return [...roles];
 }
 
 /** Build MissionPhase[] from a template's phase definitions, first one active */
@@ -72,8 +62,12 @@ function buildPhases(templateKey: string): MissionPhase[] {
 /**
  * Run the interactive mission planning questionnaire.
  *
- * Walks the user through mode, autonomy, model assignment, and constraints,
- * then returns a fully initialised MissionState ready for execution.
+ * Flow:
+ *   1. Choose mode (Standard / Minimal)
+ *   2. Assign models per role group — required on first run, saved for later
+ *   3. Choose autonomy level
+ *   4. Optional constraints
+ *   5. Build MissionState
  *
  * Returns `null` if the user cancels at any required step.
  */
@@ -91,34 +85,36 @@ export async function runMissionPlanner(
   const template = getTemplate(templateKey);
   const mode = template.mode;
 
-  // ── Step 2: Autonomy level ──────────────────────────────────────────────
+  // ── Step 2: Model assignment ────────────────────────────────────────────
+  // Check for saved defaults — skip assignment if valid defaults exist
+  let modelAssignment: ModelAssignment = {};
+  const available = getAvailableModelOptions(ctx);
+  const saved = loadModelDefaults();
+  const validDefaults = saved ? validateDefaults(saved, available) : null;
+
+  if (validDefaults) {
+    // Use saved defaults silently
+    modelAssignment = validDefaults;
+  } else {
+    // First time (or stale defaults) — require assignment via tabbed UI
+    const assignment = await showRoleModelAssigner(ctx, templateKey);
+    if (assignment === null) return null; // User cancelled
+
+    modelAssignment = assignment;
+
+    // Persist for future missions
+    if (Object.keys(assignment).length > 0) {
+      saveModelDefaults(assignment);
+    }
+  }
+
+  // ── Step 3: Autonomy level ──────────────────────────────────────────────
   const autonomyLabels = AUTONOMY_OPTIONS.map((o) => o.label);
   const autonomyChoice = await ctx.ui.select("Autonomy level", autonomyLabels);
   if (!autonomyChoice) return null;
 
   const autonomy: AutonomyLevel =
     AUTONOMY_OPTIONS.find((o) => o.label === autonomyChoice)?.value ?? DEFAULT_AUTONOMY;
-
-  // ── Step 3: Model assignment (optional) ─────────────────────────────────
-  let modelAssignment: ModelAssignment = {};
-
-  const customizeModels = await ctx.ui.confirm(
-    "Model assignment",
-    "Customize models per phase?",
-  );
-
-  if (customizeModels) {
-    const roles = getPhaseRoles(templateKey);
-
-    for (const role of roles) {
-      const modelOptions = getAvailableModelOptions(ctx);
-      const picked = await showModelPicker(ctx, `Model for "${role}"`, modelOptions);
-      // Skip cancelled selections — use current model (empty = default)
-      if (picked && picked.id) {
-        modelAssignment[role] = picked.id;
-      }
-    }
-  }
 
   // ── Step 4: Constraints (optional) ──────────────────────────────────────
   const constraints =
@@ -144,13 +140,8 @@ export async function runMissionPlanner(
       ? `${description}\n\nConstraints: ${constraints}`
       : description,
     mode,
-
-    // Simple-mode fields
     currentPhase: phases.length > 0 ? phases[0].name : undefined,
     phases,
-
-    // Full-mode fields (populated later during planning phase)
-    // Shared fields
     autonomy,
     modelAssignment,
     paused: false,
