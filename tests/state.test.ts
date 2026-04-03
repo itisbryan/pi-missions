@@ -1,13 +1,8 @@
 import { describe, it, expect } from "vitest";
-// Note: state.ts imports ExtensionAPI from @mariozechner/pi-coding-agent (peer dep).
-// We extract the pure logic functions by re-exporting through a shim, or test
-// the behavior by re-implementing the pure parts inline here.
-// saveMissionState / clearMissionState are tested via their side-effects on mocks.
 import {
   restoreMissionState,
   clearMissionState,
   advancePhase,
-  advanceFeature,
   addProgressEvent,
 } from "../extensions/state.ts";
 import type { MissionState } from "../extensions/types.ts";
@@ -29,54 +24,6 @@ function makeSimpleState(overrides: Partial<MissionState> = {}): MissionState {
     modelAssignment: {},
     paused: false,
     pauseHistory: [],
-    specApproved: false,
-    progressLog: [],
-    startedAt: new Date().toISOString(),
-    ...overrides,
-  };
-}
-
-function makeFullState(overrides: Partial<MissionState> = {}): MissionState {
-  return {
-    description: "Full mission",
-    mode: "full",
-    phases: [],
-    milestones: [
-      {
-        name: "Foundation",
-        description: "Core setup",
-        status: "active",
-        startedAt: new Date().toISOString(),
-        features: [
-          {
-            id: "feat-types",
-            description: "Define types",
-            milestone: "Foundation",
-            preconditions: [],
-            expectedBehavior: [],
-            verificationSteps: [],
-            fulfills: [],
-            status: "active",
-            startedAt: new Date().toISOString(),
-          },
-          {
-            id: "feat-state",
-            description: "State management",
-            milestone: "Foundation",
-            preconditions: [],
-            expectedBehavior: [],
-            verificationSteps: [],
-            fulfills: [],
-            status: "pending",
-          },
-        ],
-      },
-    ],
-    autonomy: "medium",
-    modelAssignment: {},
-    paused: false,
-    pauseHistory: [],
-    specApproved: true,
     progressLog: [],
     startedAt: new Date().toISOString(),
     ...overrides,
@@ -146,7 +93,6 @@ describe("restoreMissionState", () => {
       { type: "custom", customType: "mission-state", data: makeSimpleState() },
       { type: "custom", customType: "mission-state", data: null },
     ];
-    // scan from end: null found first → return null
     expect(restoreMissionState(entries)).toBeNull();
   });
 });
@@ -208,7 +154,7 @@ describe("advancePhase", () => {
       ],
     });
     const result = advancePhase(state);
-    expect(result).toBe(state); // same reference
+    expect(result).toBe(state);
   });
 
   it("updates currentPhase to next phase name", () => {
@@ -222,93 +168,6 @@ describe("advancePhase", () => {
     const original = JSON.stringify(state);
     advancePhase(state);
     expect(JSON.stringify(state)).toBe(original);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// advanceFeature
-// ---------------------------------------------------------------------------
-
-describe("advanceFeature", () => {
-  it("returns unchanged state for non-full mode", () => {
-    const state = makeSimpleState();
-    const result = advanceFeature(state);
-    expect(result).toBe(state);
-  });
-
-  it("returns unchanged state when no milestones", () => {
-    const state = makeSimpleState({ mode: "full", milestones: undefined });
-    const result = advanceFeature(state);
-    expect(result).toBe(state);
-  });
-
-  it("marks active feature as done and activates next within milestone", () => {
-    const state = makeFullState();
-    const result = advanceFeature(state);
-
-    const feat0 = result.milestones![0].features[0];
-    const feat1 = result.milestones![0].features[1];
-    expect(feat0.status).toBe("done");
-    expect(feat0.completedAt).toBeDefined();
-    expect(feat1.status).toBe("active");
-    expect(feat1.startedAt).toBeDefined();
-    expect(result.currentFeature).toBe("feat-state");
-  });
-
-  it("seals milestone and completes mission when all features done", () => {
-    const state = makeFullState({
-      milestones: [
-        {
-          name: "Foundation",
-          description: "Core setup",
-          status: "active",
-          startedAt: new Date().toISOString(),
-          features: [
-            {
-              id: "feat-only",
-              description: "Only feature",
-              milestone: "Foundation",
-              preconditions: [],
-              expectedBehavior: [],
-              verificationSteps: [],
-              fulfills: [],
-              status: "active",
-              startedAt: new Date().toISOString(),
-            },
-          ],
-        },
-      ],
-    });
-    const result = advanceFeature(state);
-
-    expect(result.milestones![0].status).toBe("sealed");
-    expect(result.completedAt).toBeDefined();
-  });
-
-  it("returns unchanged when no active feature", () => {
-    const state = makeFullState({
-      milestones: [
-        {
-          name: "Foundation",
-          description: "Core setup",
-          status: "pending",
-          features: [
-            {
-              id: "feat-1",
-              description: "Pending feature",
-              milestone: "Foundation",
-              preconditions: [],
-              expectedBehavior: [],
-              verificationSteps: [],
-              fulfills: [],
-              status: "pending",
-            },
-          ],
-        },
-      ],
-    });
-    const result = advanceFeature(state);
-    expect(result).toBe(state);
   });
 });
 

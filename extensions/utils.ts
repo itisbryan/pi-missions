@@ -33,25 +33,6 @@ export function getPhaseIcon(status: string): string {
 }
 
 /**
- * Map a feature status to its corresponding text icon.
- */
-export function getFeatureIcon(status: string): string {
-  switch (status) {
-    case "done":
-      return "✓";
-    case "active":
-      return "●";
-    case "failed":
-      return "✗";
-    case "cancelled":
-      return "⊘";
-    case "pending":
-    default:
-      return "○";
-  }
-}
-
-/**
  * Extract text content from an agent message.
  * Filters for content blocks with type 'text', joins them, and lowercases.
  * DRY helper used by the phase-transition detector.

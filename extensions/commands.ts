@@ -9,7 +9,7 @@ import { Key } from "@mariozechner/pi-tui";
 import type { MissionState } from "./types.ts";
 import type { MissionControlCallbacks, MissionControlResult } from "./mission-control.ts";
 import { saveMissionState, addProgressEvent } from "./state.ts";
-import { formatDuration, getPhaseIcon, getFeatureIcon } from "./utils.ts";
+import { formatDuration, getPhaseIcon } from "./utils.ts";
 // config.ts exports are used via planner.ts at runtime
 import { runMissionPlanner } from "./planner.ts";
 import { updateWidget as updateMissionWidget } from "./widget.ts";
@@ -91,24 +91,15 @@ export function registerMissionCommands(
             Date.now() - new Date(state.startedAt).getTime(),
           );
 
-          if (state.mode === "full") {
-            ctx.ui.notify(
-              `Active: ${state.description} (${elapsed})\n` +
-                `Milestone: ${state.currentMilestone ?? "—"}\n` +
-                `Feature: ${state.currentFeature ?? "—"}`,
-              "info",
-            );
-          } else {
-            const active = state.phases.find((p) => p.status === "active");
-            const phaseIdx = active
-              ? state.phases.indexOf(active) + 1
-              : state.phases.length;
-            ctx.ui.notify(
-              `Active: ${state.description} (${elapsed})\n` +
-                `Phase ${phaseIdx}/${state.phases.length}: ${active?.emoji ?? "✅"} ${active?.name ?? "Done"}`,
-              "info",
-            );
-          }
+          const active = state.phases.find((p) => p.status === "active");
+          const phaseIdx = active
+            ? state.phases.indexOf(active) + 1
+            : state.phases.length;
+          ctx.ui.notify(
+            `Active: ${state.description} (${elapsed})\n` +
+              `Phase ${phaseIdx}/${state.phases.length}: ${active?.emoji ?? "✅"} ${active?.name ?? "Done"}`,
+            "info",
+          );
           return;
         }
 
@@ -132,15 +123,11 @@ export function registerMissionCommands(
 
         // Build kick-off message based on mode
         const firstPhase = newState.phases.find((p) => p.status === "active");
-        const kickoff = newState.mode === "full"
-          ? `Run an orchestrated mission for: ${description}\n\n` +
-            `This is a full milestone-based mission. ` +
-            `Start by analyzing the codebase and decomposing the work into milestones and features. ` +
-            `Present the plan for my approval before implementing.`
-          : `Run an orchestrated mission for: ${description}\n\n` +
-            `Start with Phase 1 (${firstPhase?.name ?? "Plan"}): ` +
-            `Analyze the codebase and produce a detailed implementation plan. ` +
-            `Present the plan for my approval before implementing.`;
+        const kickoff =
+          `Run an orchestrated mission for: ${description}\n\n` +
+          `Start with Phase 1 (${firstPhase?.name ?? "Plan"}): ` +
+          `Analyze the codebase and produce a detailed implementation plan. ` +
+          `Present the plan for my approval before implementing.`;
 
         pi.sendUserMessage(kickoff);
         pi.setSessionName(`🎯 ${description}`);
@@ -198,42 +185,19 @@ export function registerMissionCommands(
 
         lines.push("");
 
-        // Simple/minimal mode: phase list
-        if (state.mode !== "full") {
-          lines.push("Phases:");
-          for (let i = 0; i < state.phases.length; i++) {
-            const p = state.phases[i];
-            const icon = getPhaseIcon(p.status);
-            let dur = "";
-            if (p.startedAt && p.completedAt) {
-              dur = ` (${formatDuration(new Date(p.completedAt).getTime() - new Date(p.startedAt).getTime())})`;
-            } else if (p.startedAt) {
-              dur = ` (${formatDuration(Date.now() - new Date(p.startedAt).getTime())} elapsed)`;
-            }
-            lines.push(
-              `  ${icon} Phase ${i + 1}: ${p.emoji} ${p.name}${dur}`,
-            );
+        lines.push("Phases:");
+        for (let i = 0; i < state.phases.length; i++) {
+          const p = state.phases[i];
+          const icon = getPhaseIcon(p.status);
+          let dur = "";
+          if (p.startedAt && p.completedAt) {
+            dur = ` (${formatDuration(new Date(p.completedAt).getTime() - new Date(p.startedAt).getTime())})`;
+          } else if (p.startedAt) {
+            dur = ` (${formatDuration(Date.now() - new Date(p.startedAt).getTime())} elapsed)`;
           }
-        }
-
-        // Full mode: milestone + feature list
-        if (state.mode === "full" && state.milestones) {
-          lines.push("Milestones:");
-          for (const m of state.milestones) {
-            const mIcon = getPhaseIcon(m.status);
-            let mDur = "";
-            if (m.startedAt && m.completedAt) {
-              mDur = ` (${formatDuration(new Date(m.completedAt).getTime() - new Date(m.startedAt).getTime())})`;
-            } else if (m.startedAt) {
-              mDur = ` (${formatDuration(Date.now() - new Date(m.startedAt).getTime())} elapsed)`;
-            }
-            lines.push(`  ${mIcon} ${m.name}${mDur}`);
-
-            for (const f of m.features) {
-              const fIcon = getFeatureIcon(f.status);
-              lines.push(`    ${fIcon} ${f.id}: ${f.description}`);
-            }
-          }
+          lines.push(
+            `  ${icon} Phase ${i + 1}: ${p.emoji} ${p.name}${dur}`,
+          );
         }
 
         await ctx.ui.select("Mission Status", lines);
@@ -244,136 +208,7 @@ export function registerMissionCommands(
   });
 
   // -----------------------------------------------------------------------
-  // 3. /mission-features — Feature list (full mode only)
-  // -----------------------------------------------------------------------
-
-  pi.registerCommand("mission-features", {
-    description: "Show all features grouped by milestone (full mode only)",
-    handler: async (_args: string, ctx: ExtensionCommandContext) => {
-      try {
-        const state = getState();
-        if (!state) {
-          ctx.ui.notify("No active mission.", "info");
-          return;
-        }
-
-        if (state.mode !== "full") {
-          ctx.ui.notify(
-            "Use full mode for feature tracking. Current mode: " + state.mode,
-            "warning",
-          );
-          return;
-        }
-
-        if (!state.milestones || state.milestones.length === 0) {
-          ctx.ui.notify("No milestones or features defined.", "info");
-          return;
-        }
-
-        const lines: string[] = [`Features for: ${state.description}`, ""];
-
-        for (const m of state.milestones) {
-          const mIcon = getPhaseIcon(m.status);
-          const doneCount = m.features.filter(
-            (f) => f.status === "done",
-          ).length;
-          lines.push(
-            `${mIcon} ${m.name} (${doneCount}/${m.features.length} done)`,
-          );
-          lines.push(`  ${m.description}`);
-
-          for (const f of m.features) {
-            const fIcon = getFeatureIcon(f.status);
-            const active = f.id === state.currentFeature ? " ← current" : "";
-            lines.push(`  ${fIcon} [${f.id}] ${f.description}${active}`);
-          }
-          lines.push("");
-        }
-
-        await ctx.ui.select("Mission Features", lines);
-      } catch (err: any) {
-        ctx.ui.notify(`Error in /mission-features: ${err.message}`, "error");
-      }
-    },
-  });
-
-  // -----------------------------------------------------------------------
-  // 4. /mission-validate — Validation contract status
-  // -----------------------------------------------------------------------
-
-  pi.registerCommand("mission-validate", {
-    description: "Show validation assertion status",
-    handler: async (_args: string, ctx: ExtensionCommandContext) => {
-      try {
-        const state = getState();
-        if (!state) {
-          ctx.ui.notify("No active mission.", "info");
-          return;
-        }
-
-        const assertions = state.validationAssertions;
-        if (!assertions || assertions.length === 0) {
-          ctx.ui.notify("No validation assertions tracked.", "info");
-          return;
-        }
-
-        const counts = {
-          passed: 0,
-          failed: 0,
-          pending: 0,
-          blocked: 0,
-          skipped: 0,
-        };
-
-        const lines: string[] = [`Validation: ${state.description}`, ""];
-
-        // Group by area
-        const byArea = new Map<string, typeof assertions>();
-        for (const a of assertions) {
-          counts[a.status]++;
-          const list = byArea.get(a.area) ?? [];
-          list.push(a);
-          byArea.set(a.area, list);
-        }
-
-        // Summary
-        lines.push(
-          `Summary: ${counts.passed} passed, ${counts.failed} failed, ` +
-            `${counts.pending} pending, ${counts.blocked} blocked, ${counts.skipped} skipped`,
-        );
-        lines.push("");
-
-        // Detail by area
-        for (const [area, items] of byArea) {
-          lines.push(`[${area}]`);
-          for (const a of items) {
-            const icon =
-              a.status === "passed"
-                ? "✅"
-                : a.status === "failed"
-                  ? "❌"
-                  : a.status === "blocked"
-                    ? "🚫"
-                    : a.status === "skipped"
-                      ? "⏭️"
-                      : "⬜";
-            lines.push(`  ${icon} ${a.title}: ${a.description}`);
-            if (a.evidence) {
-              lines.push(`     Evidence: ${a.evidence}`);
-            }
-          }
-          lines.push("");
-        }
-
-        await ctx.ui.select("Validation Status", lines);
-      } catch (err: any) {
-        ctx.ui.notify(`Error in /mission-validate: ${err.message}`, "error");
-      }
-    },
-  });
-
-  // -----------------------------------------------------------------------
-  // 5. /mission-skip — Skip current phase or feature
+  // 3. /mission-skip — Skip current phase
   // -----------------------------------------------------------------------
 
   pi.registerCommand("mission-skip", {
@@ -388,35 +223,6 @@ export function registerMissionCommands(
 
         const now = new Date().toISOString();
 
-        // Full mode: skip current feature
-        if (state.mode === "full" && state.milestones && state.currentFeature) {
-          const featureId = state.currentFeature;
-          const ok = await ctx.ui.confirm(
-            "Skip Feature",
-            `Skip feature "${featureId}"?`,
-          );
-          if (!ok) return;
-
-          // Clone state and mark feature as cancelled
-          const milestones = state.milestones.map((m) => ({
-            ...m,
-            features: m.features.map((f) => {
-              if (f.id === featureId && f.status === "active") {
-                return { ...f, status: "cancelled" as const, completedAt: now };
-              }
-              return { ...f };
-            }),
-          }));
-
-          state = { ...state, milestones };
-          addProgressEvent(state, "feature_complete", `Skipped feature: ${featureId}`);
-          persist(ctx, state);
-
-          ctx.ui.notify(`Skipped feature: ${featureId}`, "info");
-          return;
-        }
-
-        // Simple/minimal mode: skip current phase
         const activePhase = state.phases.find((p) => p.status === "active");
         if (!activePhase) {
           ctx.ui.notify("No active phase to skip.", "warning");
@@ -467,7 +273,7 @@ export function registerMissionCommands(
   });
 
   // -----------------------------------------------------------------------
-  // 6. /mission-done — Mark mission complete
+  // 4. /mission-done — Mark mission complete
   // -----------------------------------------------------------------------
 
   pi.registerCommand("mission-done", {
@@ -503,30 +309,9 @@ export function registerMissionCommands(
           return { ...p };
         });
 
-        // Mark remaining milestones/features as skipped/cancelled
-        const milestones = state.milestones?.map((m) => ({
-          ...m,
-          features: m.features.map((f) => {
-            if (f.status === "active" || f.status === "pending") {
-              return {
-                ...f,
-                status: ("cancelled" as const),
-                completedAt: now,
-              };
-            }
-            return { ...f };
-          }),
-          status:
-            m.status === "active" || m.status === "pending"
-              ? ("sealed" as const)
-              : m.status,
-          completedAt: m.completedAt ?? now,
-        }));
-
         const updated: MissionState = {
           ...state,
           phases,
-          milestones,
           completedAt: now,
         };
         addProgressEvent(updated, "mission_complete", "Mission marked complete by user");
@@ -544,7 +329,7 @@ export function registerMissionCommands(
   });
 
   // -----------------------------------------------------------------------
-  // 7. /mission-pause — Toggle pause/resume
+  // 5. /mission-pause — Toggle pause/resume
   // -----------------------------------------------------------------------
 
   pi.registerCommand("mission-pause", {
@@ -600,7 +385,7 @@ export function registerMissionCommands(
   });
 
   // -----------------------------------------------------------------------
-  // 8. /mission-reset — Clear everything
+  // 6. /mission-reset — Clear everything
   // -----------------------------------------------------------------------
 
   pi.registerCommand("mission-reset", {
@@ -696,38 +481,22 @@ export function registerMissionCommands(
 
             let updated: MissionState;
 
-            if (s.mode === "full" && s.milestones && s.currentFeature) {
-              // Full mode: cancel current feature
-              const featureId = s.currentFeature;
-              const milestones = s.milestones.map((m) => ({
-                ...m,
-                features: m.features.map((f) =>
-                  f.id === featureId && f.status === "active"
-                    ? { ...f, status: "cancelled" as const, completedAt: now }
-                    : { ...f },
-                ),
-              }));
-              updated = { ...s, milestones };
-              addProgressEvent(updated, "feature_complete", `Skipped feature: ${featureId} (via Mission Control)`);
+            const phases = s.phases.map((p) => ({ ...p }));
+            const activeIdx = phases.findIndex((p) => p.status === "active");
+            if (activeIdx === -1) return false;
+            phases[activeIdx].status = "skipped";
+            phases[activeIdx].completedAt = now;
+            const next: Partial<MissionState> = { phases };
+            if (activeIdx + 1 < phases.length) {
+              phases[activeIdx + 1].status = "active";
+              phases[activeIdx + 1].startedAt = now;
+              next.currentPhase = phases[activeIdx + 1].name;
             } else {
-              // Simple/minimal mode: skip current phase
-              const phases = s.phases.map((p) => ({ ...p }));
-              const activeIdx = phases.findIndex((p) => p.status === "active");
-              if (activeIdx === -1) return false;
-              phases[activeIdx].status = "skipped";
-              phases[activeIdx].completedAt = now;
-              const next: Partial<MissionState> = { phases };
-              if (activeIdx + 1 < phases.length) {
-                phases[activeIdx + 1].status = "active";
-                phases[activeIdx + 1].startedAt = now;
-                next.currentPhase = phases[activeIdx + 1].name;
-              } else {
-                next.completedAt = now;
-              }
-              updated = { ...s, ...next };
-              const skippedName = s.phases[activeIdx]?.name ?? "phase";
-              addProgressEvent(updated, "phase_complete", `Skipped ${skippedName} (via Mission Control)`);
+              next.completedAt = now;
             }
+            updated = { ...s, ...next };
+            const skippedName = s.phases[activeIdx]?.name ?? "phase";
+            addProgressEvent(updated, "phase_complete", `Skipped ${skippedName} (via Mission Control)`);
 
             setState(updated);
             saveMissionState(pi, updated);
@@ -751,19 +520,7 @@ export function registerMissionCommands(
               return { ...p };
             });
 
-            // Mark remaining milestones/features as sealed/cancelled
-            const milestones = s.milestones?.map((m) => ({
-              ...m,
-              features: m.features.map((f) =>
-                f.status === "active" || f.status === "pending"
-                  ? { ...f, status: "cancelled" as const, completedAt: now }
-                  : { ...f },
-              ),
-              status: m.status === "active" || m.status === "pending" ? ("sealed" as const) : m.status,
-              completedAt: m.completedAt ?? now,
-            }));
-
-            const updated: MissionState = { ...s, phases, milestones, completedAt: now };
+            const updated: MissionState = { ...s, phases, completedAt: now };
             addProgressEvent(updated, "mission_complete", "Mission completed via Mission Control");
             setState(updated);
             saveMissionState(pi, updated);

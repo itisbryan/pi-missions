@@ -13,7 +13,7 @@ import {
   DEFAULT_MINIMAL_PHASES,
   PHASE_ROLE_MAP,
 } from "./config.ts";
-import { getPhaseIcon, getFeatureIcon, truncate } from "./utils.ts";
+import { getPhaseIcon } from "./utils.ts";
 
 // ---------------------------------------------------------------------------
 // Phase instruction lookup
@@ -57,27 +57,20 @@ You are in the PLANNING phase. Your job is to produce a detailed, actionable spe
    - Note testing patterns, CI configuration, and deployment setup
 
 2. **Requirement Decomposition**
-   - Break the mission into discrete, independently deliverable features
-   - For each feature, define:
-     • **Preconditions** — what must be true before work begins
-     • **Expected behavior** — observable outcomes when the feature works
-     • **Verification steps** — concrete steps to confirm correctness
+   - Break the mission into discrete, independently deliverable work items
+   - For each item, identify:
      • **Files affected** — which files will be created or modified
-   - Group features into logical milestones (if full mode)
+     • **Key decisions** — trade-offs and approach choices
+     • **Verification** — how to confirm correctness
 
 3. **Dependency Mapping**
-   - Order features so that each one's preconditions are satisfied by earlier work
+   - Order work so that dependencies are satisfied first
    - Identify shared foundations (types, schemas, utilities) that must come first
    - Flag any external dependencies or user decisions needed
 
-4. **Validation Contract** (full mode)
-   - Define validation assertions: testable claims that must hold when the mission is complete
-   - Each assertion has an area (security, performance, UX, etc.), title, and description
-   - Map which features fulfill which assertions
-
-5. **Spec Presentation**
+4. **Spec Presentation**
    - Present the full plan in a clear, structured format
-   - Include: mission overview, milestones, features with all metadata, validation assertions
+   - Include: mission overview, approach, files to create/modify, key decisions
    - Ask: "Does this capture everything? Any changes before I proceed?"
    - Iterate until the user says 'approve', 'go', 'lgtm', or equivalent
 
@@ -103,47 +96,28 @@ You are in the PLANNING phase. Your job is to produce a detailed, actionable spe
 
 **Remember: READ ONLY. Do not edit files until the spec is approved and you move to implementation.**
 
-### Registering the Plan (Full Mode)
-Once the user approves, use the \`mission_update\` tool to register each feature and assertion:
-- \`mission_update({ action: "add_feature", milestone: "...", id: "...", description: "...", ... })\`
-- \`mission_update({ action: "add_assertion", id: "VAL-...", area: "...", title: "...", description: "..." })\`
-- Then announce "Plan approved, proceeding to implementation" so the tracker advances.
-
-This populates the mission state so the tracker can monitor progress. Do this BEFORE starting any implementation.`;
+Once the user explicitly approves, announce "Plan approved, proceeding to implementation" so the tracker advances.`;
 
 /**
  * Feature execution protocol — Factory worker droid pattern.
  *
  * Each feature is implemented as an atomic unit with structured reporting.
  */
-export const FEATURE_EXECUTION_PROTOCOL = `## 🔨 Feature Execution Protocol
+export const FEATURE_EXECUTION_PROTOCOL = `## 🔨 Implementation Protocol
 
-You are implementing a specific feature as part of an orchestrated mission. Follow this protocol exactly.
-
-### Before Starting
-1. Re-read the feature specification: preconditions, expected behavior, verification steps
-2. Confirm all preconditions are met (prior features complete, dependencies available)
-3. If a precondition is NOT met, report it and wait — do not work around it
+You are implementing work as part of an orchestrated mission. Follow this protocol exactly.
 
 ### Implementation Rules
-- **One feature at a time.** Complete the current feature before moving to the next.
 - **Follow existing patterns.** Match the codebase's style, naming, and architecture.
 - **Commit incrementally.** Each logical unit of change gets its own commit.
 - **No scope creep.** Implement exactly what the spec says. If you spot improvements, note them but don't add them.
 - **Test as you go.** Write tests alongside implementation, not as an afterthought.
 
-### Chain of Thought
-As you work, maintain an internal chain of thought:
-1. "I need to implement [X]. The spec says it should [expected behavior]."
-2. "The existing pattern for this is [reference]. I'll follow that."
-3. "I'll create/modify these files: [list]."
-4. "Testing this by: [approach]."
-
 ### Completion Report
-When the feature is done, report:
+When the work is done, report:
 
 \`\`\`
-## Feature Complete: [feature-id]
+## Phase Complete
 
 ### What was implemented
 - [bullet list of concrete changes]
@@ -154,27 +128,16 @@ When the feature is done, report:
 ### What was verified
 - [test results, manual checks]
 
-### What was left undone
-- [anything explicitly out of scope or deferred]
-
 ### Concerns or risks
 - [anything the reviewer should pay attention to]
 \`\`\`
 
-### Updating Status
-After completing or failing a feature, update its status:
-- \`mission_update({ action: "update_feature_status", featureId: "...", status: "done" })\`
-- Or \`mission_update({ action: "update_feature_status", featureId: "...", status: "failed" })\`
-
-Then announce it clearly: "Feature [id] complete" or "Feature [id] failed".
-
 ### Failure Handling
-If you cannot complete the feature:
+If you cannot complete the current work:
 1. Document what you tried and why it failed
 2. Revert any partial changes that would leave the codebase in a broken state
 3. Report the failure with as much diagnostic detail as possible
-4. Call \`mission_update\` to mark the feature as failed
-5. Do NOT silently skip the feature or move to the next one`;
+4. Do NOT silently skip or move to the next phase`;
 
 /**
  * Audit protocol — Factory scrutiny-feature-reviewer pattern.
@@ -341,17 +304,12 @@ If an assertion cannot be tested:
  * Generate the full mission protocol injected into the system prompt.
  *
  * - Simple/minimal mode: phase-based protocol with current phase instructions
- * - Full mode: Factory-inspired orchestrator with milestone/feature context
- * - Paused: appends pause notice regardless of mode
+ * Paused: appends pause notice.
  */
 export function buildMissionProtocol(state: MissionState): string {
   const sections: string[] = [];
 
-  if (state.mode === "full") {
-    sections.push(buildFullModeProtocol(state));
-  } else {
-    sections.push(buildSimpleModeProtocol(state));
-  }
+  sections.push(buildSimpleModeProtocol(state));
 
   // Append pause notice if the mission is paused
   if (state.paused) {
@@ -436,178 +394,6 @@ function buildSimpleModeProtocol(state: MissionState): string {
 }
 
 // ---------------------------------------------------------------------------
-// Full (Factory-inspired) mode protocol
-// ---------------------------------------------------------------------------
-
-function buildFullModeProtocol(state: MissionState): string {
-  const milestones = state.milestones ?? [];
-  const assertions = state.validationAssertions ?? [];
-
-  const currentMilestone = milestones.find(
-    (m) => m.name === state.currentMilestone,
-  );
-  const currentFeature = currentMilestone?.features.find(
-    (f) => f.id === state.currentFeature,
-  );
-
-  const completedFeatures = milestones.flatMap((m) =>
-    m.features.filter((f) => f.status === "done"),
-  );
-  const totalFeatures = milestones.flatMap((m) => m.features);
-  const sealedMilestones = milestones.filter(
-    (m) => m.status === "sealed" || m.status === "done",
-  );
-
-  const lines: string[] = [
-    `# 🏭 Orchestrated Mission: ${state.description}`,
-    "",
-    "You are running an **orchestrated, milestone-based mission** following Factory.ai patterns.",
-    "Work is decomposed into milestones → features. Each feature is an atomic deliverable",
-    "with preconditions, expected behavior, and verification steps.",
-    "",
-    `**Mode:** full | **Autonomy:** ${state.autonomy} | **Progress:** ${completedFeatures.length}/${totalFeatures.length} features, ${sealedMilestones.length}/${milestones.length} milestones`,
-    "",
-  ];
-
-  // Spec status gate
-  if (!state.specApproved) {
-    lines.push("## ⚠️ Spec Not Yet Approved");
-    lines.push("");
-    lines.push(
-      "The mission plan has not been approved by the user. You MUST complete the planning phase first.",
-    );
-    lines.push("");
-    lines.push(PLANNING_PROTOCOL);
-    return lines.join("\n");
-  }
-
-  // ---- Milestone overview ----
-  lines.push("## Milestone Overview");
-  lines.push("");
-
-  for (let i = 0; i < milestones.length; i++) {
-    const m = milestones[i];
-    const icon = getMilestoneIcon(m.status);
-    const doneCount = m.features.filter((f) => f.status === "done").length;
-    const isCurrent = m.name === state.currentMilestone;
-    const marker = isCurrent ? " ← ACTIVE" : "";
-
-    lines.push(
-      `${icon} **Milestone ${i + 1}: ${m.name}** — ${doneCount}/${m.features.length} features${marker}`,
-    );
-    lines.push(`  ${m.description}`);
-
-    // Show feature list for the active milestone
-    if (isCurrent) {
-      for (const f of m.features) {
-        const fIcon = getFeatureIcon(f.status);
-        const fMarker = f.id === state.currentFeature ? " ← CURRENT" : "";
-        lines.push(`  ${fIcon} \`${f.id}\` ${truncate(f.description, 80)}${fMarker}`);
-      }
-    }
-    lines.push("");
-  }
-
-  // ---- Current feature context ----
-  if (currentFeature) {
-    lines.push("## Current Feature");
-    lines.push("");
-    lines.push(`**ID:** \`${currentFeature.id}\``);
-    lines.push(`**Description:** ${currentFeature.description}`);
-    lines.push(`**Milestone:** ${currentFeature.milestone}`);
-    lines.push("");
-
-    if (currentFeature.preconditions.length > 0) {
-      lines.push("### Preconditions");
-      for (const pc of currentFeature.preconditions) {
-        lines.push(`- ${pc}`);
-      }
-      lines.push("");
-    }
-
-    if (currentFeature.expectedBehavior.length > 0) {
-      lines.push("### Expected Behavior");
-      for (const eb of currentFeature.expectedBehavior) {
-        lines.push(`- ${eb}`);
-      }
-      lines.push("");
-    }
-
-    if (currentFeature.verificationSteps.length > 0) {
-      lines.push("### Verification Steps");
-      for (const vs of currentFeature.verificationSteps) {
-        lines.push(`- ${vs}`);
-      }
-      lines.push("");
-    }
-
-    if (currentFeature.fulfills.length > 0) {
-      const fulfilled = assertions.filter((a) =>
-        currentFeature.fulfills.includes(a.id),
-      );
-      if (fulfilled.length > 0) {
-        lines.push("### Fulfills Assertions");
-        for (const a of fulfilled) {
-          lines.push(`- \`${a.id}\` [${a.area}] ${a.title}`);
-        }
-        lines.push("");
-      }
-    }
-
-    // Inject feature execution protocol
-    lines.push(FEATURE_EXECUTION_PROTOCOL);
-    lines.push("");
-  } else if (state.completedAt) {
-    // All features done — run validation
-    lines.push("## All Features Complete — Validation Phase");
-    lines.push("");
-    lines.push(
-      "Every feature has been implemented. Now validate the entire mission against the assertion contract.",
-    );
-    lines.push("");
-    lines.push(VERIFY_PROTOCOL);
-    lines.push("");
-  }
-
-  // ---- Validation contract summary ----
-  if (assertions.length > 0) {
-    lines.push("## Validation Contract");
-    lines.push("");
-    const passed = assertions.filter((a) => a.status === "passed").length;
-    const failed = assertions.filter((a) => a.status === "failed").length;
-    const pending = assertions.filter((a) => a.status === "pending").length;
-    const blocked = assertions.filter((a) => a.status === "blocked").length;
-
-    lines.push(
-      `**Status:** ${passed} passed, ${failed} failed, ${blocked} blocked, ${pending} pending`,
-    );
-    lines.push("");
-
-    for (const a of assertions) {
-      const aIcon = getAssertionIcon(a.status);
-      lines.push(`${aIcon} \`${a.id}\` [${a.area}] **${a.title}** — ${a.description}`);
-    }
-    lines.push("");
-  }
-
-  // ---- Feature decomposition guidance ----
-  lines.push("## Orchestration Rules");
-  lines.push("");
-  lines.push("1. **One feature at a time.** Complete the current feature fully before moving on.");
-  lines.push("2. **Follow the DAG.** Features are ordered so preconditions are met. Do not skip ahead.");
-  lines.push("3. **Announce transitions.** When a feature is done, say: \"Feature [id] complete\".");
-  lines.push("4. **Report failures immediately.** If a feature cannot be completed, say: \"Feature [id] failed\" with a reason.");
-  lines.push("5. **Milestone boundaries.** When all features in a milestone are done, the milestone is sealed automatically.");
-  lines.push("6. **Validation comes last.** After all milestones are sealed, run the verification protocol.");
-  lines.push("");
-
-  // ---- Autonomy guidance ----
-  lines.push(buildAutonomyGuidance(state.autonomy));
-
-  return lines.join("\n");
-}
-
-// ---------------------------------------------------------------------------
 // Status builder
 // ---------------------------------------------------------------------------
 
@@ -629,69 +415,22 @@ export function buildMissionStatus(state: MissionState): string {
     lines.push("**Status:** 🔄 IN PROGRESS");
   }
 
-  // Mode-specific status
-  if (state.mode === "full") {
-    const milestones = state.milestones ?? [];
-    const totalFeatures = milestones.flatMap((m) => m.features);
-    const doneFeatures = totalFeatures.filter((f) => f.status === "done");
-    const sealedMilestones = milestones.filter(
-      (m) => m.status === "sealed" || m.status === "done",
-    );
+  const done = state.phases.filter((p) => p.status === "done").length;
+  lines.push(`**Mode:** ${state.mode === "simple" ? "Standard" : "Minimal"}`);
+  lines.push(`**Progress:** ${done}/${state.phases.length} phases`);
 
-    lines.push(`**Mode:** Full (milestone-based)`);
+  if (state.currentPhase) {
+    const phase = state.phases.find((p) => p.name === state.currentPhase);
     lines.push(
-      `**Progress:** ${doneFeatures.length}/${totalFeatures.length} features | ${sealedMilestones.length}/${milestones.length} milestones`,
+      `**Current phase:** ${phase?.emoji ?? "📋"} ${state.currentPhase}`,
     );
+  }
 
-    if (state.currentMilestone) {
-      lines.push(`**Current milestone:** ${state.currentMilestone}`);
-    }
-    if (state.currentFeature) {
-      const feature = totalFeatures.find((f) => f.id === state.currentFeature);
-      lines.push(
-        `**Current feature:** \`${state.currentFeature}\`${feature ? ` — ${truncate(feature.description, 60)}` : ""}`,
-      );
-    }
-
-    // Milestone status list
-    if (milestones.length > 0) {
-      lines.push("");
-      for (const m of milestones) {
-        const icon = getMilestoneIcon(m.status);
-        const done = m.features.filter((f) => f.status === "done").length;
-        lines.push(`${icon} ${m.name}: ${done}/${m.features.length}`);
-      }
-    }
-
-    // Validation summary
-    const assertions = state.validationAssertions ?? [];
-    if (assertions.length > 0) {
-      const passed = assertions.filter((a) => a.status === "passed").length;
-      const failed = assertions.filter((a) => a.status === "failed").length;
-      lines.push("");
-      lines.push(
-        `**Validation:** ${passed}/${assertions.length} passed${failed > 0 ? `, ${failed} failed` : ""}`,
-      );
-    }
-  } else {
-    // Simple / minimal mode
-    const done = state.phases.filter((p) => p.status === "done").length;
-    lines.push(`**Mode:** ${state.mode === "simple" ? "Standard" : "Minimal"}`);
-    lines.push(`**Progress:** ${done}/${state.phases.length} phases`);
-
-    if (state.currentPhase) {
-      const phase = state.phases.find((p) => p.name === state.currentPhase);
-      lines.push(
-        `**Current phase:** ${phase?.emoji ?? "📋"} ${state.currentPhase}`,
-      );
-    }
-
-    // Phase list
-    lines.push("");
-    for (const p of state.phases) {
-      const icon = getPhaseIcon(p.status);
-      lines.push(`${icon} ${p.emoji} ${p.name}`);
-    }
+  // Phase list
+  lines.push("");
+  for (const p of state.phases) {
+    const icon = getPhaseIcon(p.status);
+    lines.push(`${icon} ${p.emoji} ${p.name}`);
   }
 
   return lines.join("\n");
@@ -700,35 +439,6 @@ export function buildMissionStatus(state: MissionState): string {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function getMilestoneIcon(status: string): string {
-  switch (status) {
-    case "done":
-    case "sealed":
-      return "✅";
-    case "active":
-      return "🔄";
-    case "pending":
-    default:
-      return "⬜";
-  }
-}
-
-function getAssertionIcon(status: string): string {
-  switch (status) {
-    case "passed":
-      return "✅";
-    case "failed":
-      return "❌";
-    case "blocked":
-      return "⚠️";
-    case "skipped":
-      return "⏭️";
-    case "pending":
-    default:
-      return "⬜";
-  }
-}
 
 /**
  * Return the specialized protocol for the current phase role.
@@ -825,8 +535,8 @@ function buildAutonomyGuidance(autonomy: AutonomyLevel): string {
     case "medium":
       lines.push("**Level: MEDIUM** — Pause at milestone boundaries and decision points.");
       lines.push("");
-      lines.push("- Work through features within a milestone without pausing.");
-      lines.push("- STOP at milestone boundaries to summarize progress and confirm direction.");
+      lines.push("- Work through phases without pausing for routine decisions.");
+      lines.push("- STOP at significant decision points to summarize progress and confirm direction.");
       lines.push("- STOP if you encounter ambiguity that could affect the overall plan.");
       lines.push("- STOP if a feature fails and you're unsure how to proceed.");
       lines.push("- For routine decisions (naming, file structure), use your best judgment.");
@@ -835,7 +545,7 @@ function buildAutonomyGuidance(autonomy: AutonomyLevel): string {
     case "high":
       lines.push("**Level: HIGH** — Run to completion with minimal interruption.");
       lines.push("");
-      lines.push("- Work through all milestones and features without pausing.");
+      lines.push("- Work through all phases without pausing.");
       lines.push("- Only STOP if:");
       lines.push("  • A critical failure occurs that you cannot recover from");
       lines.push("  • An external dependency is missing (API key, service, etc.)");

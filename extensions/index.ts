@@ -1,8 +1,8 @@
 /**
- * pi-mission — Factory-style orchestrated multi-phase development missions
+ * pi-mission — Orchestrated multi-phase development missions
  *
  * Thin orchestrator that wires together the factored modules:
- *   state.ts     — Persistence, phase/feature advancement, progress logging
+ *   state.ts     — Persistence, phase advancement, progress logging
  *   widget.ts    — Compact always-visible progress widget
  *   detector.ts  — LLM output pattern matching for transitions
  *   protocol.ts  — System prompt injection (mission protocol + live status)
@@ -22,14 +22,13 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { MissionState } from "./types.ts";
-import { restoreMissionState, saveMissionState, advancePhase, advanceFeature, addProgressEvent } from "./state.ts";
+import { restoreMissionState, saveMissionState, advancePhase, addProgressEvent } from "./state.ts";
 import { updateWidget } from "./widget.ts";
-import { detectPhaseTransition, detectFeatureTransition, detectMilestoneTransition, detectAssertionResult } from "./detector.ts";
+import { detectPhaseTransition } from "./detector.ts";
 import { buildMissionProtocol, buildMissionStatus } from "./protocol.ts";
 import { extractTextFromMessage } from "./utils.ts";
 import { registerMissionCommands } from "./commands.ts";
 import { PHASE_ROLE_MAP } from "./config.ts";
-import { registerMissionTools } from "./tools.ts";
 
 // ---------------------------------------------------------------------------
 // Model auto-switching helper
@@ -49,18 +48,12 @@ async function maybeSwitchModel(
 
   let targetModelId: string | undefined;
 
-  if (state.mode === "full") {
-    // Full mode: use "coder" role during feature execution, "verifier" when all done
-    const role = state.completedAt ? "verifier" : "coder";
-    targetModelId = state.modelAssignment[role];
-  } else {
-    // Simple/minimal mode: determine role from active phase
-    const activePhase = state.phases.find((p) => p.status === "active");
-    if (!activePhase) return;
-    const role = PHASE_ROLE_MAP[activePhase.name];
-    if (!role) return;
-    targetModelId = state.modelAssignment[role];
-  }
+  // Determine role from active phase
+  const activePhase = state.phases.find((p) => p.status === "active");
+  if (!activePhase) return;
+  const role = PHASE_ROLE_MAP[activePhase.name];
+  if (!role) return;
+  targetModelId = state.modelAssignment[role];
 
   if (!targetModelId) return;
 
@@ -134,106 +127,35 @@ export default function missionExtension(pi: ExtensionAPI) {
 
       let updated = false;
 
-      if (mission.mode === "simple" || mission.mode === "minimal") {
-        // --- Simple/Minimal: phase-based detection ---
-        const activeIdx = mission.phases.findIndex((p) => p.status === "active");
-        const result = detectPhaseTransition(text, mission.phases, activeIdx);
+      // Phase-based detection
+      const activeIdx = mission.phases.findIndex((p) => p.status === "active");
+      const result = detectPhaseTransition(text, mission.phases, activeIdx);
 
-        if (result) {
-          if (result.type === "complete") {
-            const phaseName = mission.phases[result.phaseIndex].name;
-            mission = advancePhase(mission);
-            addProgressEvent(mission, "phase_complete", `Completed phase: ${phaseName}`);
-            // Log the next phase starting, or mission complete
-            if (mission.completedAt) {
-              addProgressEvent(mission, "mission_complete", "All phases complete — mission finished");
-            } else {
-              const nextActive = mission.phases.find((p) => p.status === "active");
-              if (nextActive) {
-                addProgressEvent(mission, "phase_start", `Starting phase: ${nextActive.name}`);
-              }
-            }
+      if (result) {
+        if (result.type === "complete") {
+          const phaseName = mission.phases[result.phaseIndex].name;
+          mission = advancePhase(mission);
+          addProgressEvent(mission, "phase_complete", `Completed phase: ${phaseName}`);
+          // Log the next phase starting, or mission complete
+          if (mission.completedAt) {
+            addProgressEvent(mission, "mission_complete", "All phases complete — mission finished");
           } else {
-            // Transition: LLM announced moving to phase N — advance from current
-            mission = advancePhase(mission);
-            const newActive = mission.phases.find((p) => p.status === "active");
-            if (newActive) {
-              addProgressEvent(mission, "phase_start", `Advancing to phase: ${newActive.name}`);
-            } else if (mission.completedAt) {
-              addProgressEvent(mission, "mission_complete", "All phases complete — mission finished");
+            const nextActive = mission.phases.find((p) => p.status === "active");
+            if (nextActive) {
+              addProgressEvent(mission, "phase_start", `Starting phase: ${nextActive.name}`);
             }
           }
-          updated = true;
-        }
-      } else {
-        // --- Full mode: feature + milestone detection ---
-        const allFeatures = mission.milestones?.flatMap((m) => m.features) ?? [];
-        const featureResult = detectFeatureTransition(text, allFeatures);
-
-        if (featureResult) {
-          if (featureResult.type === "complete") {
-            mission = advanceFeature(mission);
-            addProgressEvent(mission, "feature_complete", `Completed feature: ${featureResult.featureId}`);
-            if (mission.completedAt) {
-              addProgressEvent(mission, "mission_complete", "All features complete — mission finished");
-            }
-          } else if (featureResult.type === "start") {
-            addProgressEvent(mission, "feature_start", `Starting feature: ${featureResult.featureId}`);
-          } else if (featureResult.type === "failed") {
-            addProgressEvent(mission, "feature_failed", `Feature failed: ${featureResult.featureId}`);
-          }
-          updated = true;
-        }
-
-        if (!updated && mission.milestones) {
-          const msResult = detectMilestoneTransition(text, mission.milestones);
-          if (msResult) {
-            const msName = mission.milestones[msResult.milestoneIndex]?.name ?? `#${msResult.milestoneIndex + 1}`;
-            if (msResult.type === "complete") {
-              addProgressEvent(mission, "milestone_complete", `Completed milestone: ${msName}`);
-            } else if (msResult.type === "start") {
-              addProgressEvent(mission, "milestone_start", `Starting milestone: ${msName}`);
-            }
-            updated = true;
+        } else {
+          // Transition: LLM announced moving to phase N — advance from current
+          mission = advancePhase(mission);
+          const newActive = mission.phases.find((p) => p.status === "active");
+          if (newActive) {
+            addProgressEvent(mission, "phase_start", `Advancing to phase: ${newActive.name}`);
+          } else if (mission.completedAt) {
+            addProgressEvent(mission, "mission_complete", "All phases complete — mission finished");
           }
         }
-
-        // --- Spec approval detection (full mode) ---
-        if (mission.mode === "full" && !mission.specApproved && !updated) {
-          const approvalPatterns = [
-            /plan\s+approved/,
-            /spec\s+approved/,
-            /specification\s+approved/,
-            /proceeding\s+(?:to|with)\s+implementation/,
-            /moving\s+to\s+implementation/,
-            /beginning\s+implementation/,
-            /starting\s+implementation/,
-          ];
-          if (approvalPatterns.some((p) => p.test(text))) {
-            mission = { ...mission, specApproved: true };
-            addProgressEvent(mission, "phase_complete", "Spec approved — entering implementation");
-            updated = true;
-          }
-        }
-
-        // --- Validation assertion detection ---
-        if (mission.validationAssertions && mission.validationAssertions.length > 0) {
-          const assertionResult = detectAssertionResult(text, mission.validationAssertions);
-          if (assertionResult) {
-            const assertion = mission.validationAssertions.find(
-              (a) => a.id === assertionResult.assertionId,
-            );
-            if (assertion) {
-              assertion.status = assertionResult.type;
-              addProgressEvent(
-                mission,
-                assertionResult.type === "passed" ? "feature_complete" : "feature_failed",
-                `Assertion ${assertion.id}: ${assertionResult.type}`,
-              );
-              updated = true;
-            }
-          }
-        }
+        updated = true;
       }
 
       if (updated) {
@@ -284,8 +206,5 @@ export default function missionExtension(pi: ExtensionAPI) {
   registerMissionCommands(pi, getState, setState);
 
   // -------------------------------------------------------------------
-  // Register mission management tool (for full mode feature population)
-  // -------------------------------------------------------------------
 
-  registerMissionTools(pi, getState, setState);
 }

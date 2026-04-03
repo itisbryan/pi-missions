@@ -1,0 +1,162 @@
+name: Draft Release
+
+# Drafts a release with structured notes every time main receives new commits.
+# The draft accumulates changes until you're ready to publish.
+# To release: review the draft on GitHub → edit if needed → click "Publish".
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  draft:
+    name: Draft Release Notes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get current version
+        id: version
+        run: echo "version=$(node -p 'require("./package.json").version')" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes
+        id: notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # Find the latest published release tag (skip drafts)
+          PREV_TAG=$(git tag -l 'v*' --sort=-v:refname | head -1)
+
+          # Collect commits since last tag (or all if no tags)
+          if [ -n "$PREV_TAG" ]; then
+            RANGE="${PREV_TAG}..HEAD"
+            COMPARE_URL="https://github.com/${{ github.repository }}/compare/${PREV_TAG}...v${VERSION}"
+          else
+            RANGE="HEAD"
+            COMPARE_URL=""
+          fi
+
+          # ── Categorise commits by conventional-commit prefix ──
+          FEATURES=""
+          FIXES=""
+          REFACTORS=""
+          DOCS=""
+          CHORES=""
+          OTHER=""
+
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            HASH=$(echo "$line" | cut -d' ' -f1)
+            MSG=$(echo "$line" | cut -d' ' -f2-)
+            SHORT="${HASH:0:7}"
+            ENTRY="- ${MSG} (\`${SHORT}\`)"
+
+            case "$MSG" in
+              feat:*|feat\(*) FEATURES="${FEATURES}${ENTRY}"$'\n' ;;
+              fix:*|fix\(*)   FIXES="${FIXES}${ENTRY}"$'\n' ;;
+              refactor:*|refactor\(*) REFACTORS="${REFACTORS}${ENTRY}"$'\n' ;;
+              docs:*|docs\(*) DOCS="${DOCS}${ENTRY}"$'\n' ;;
+              chore:*|chore\(*|ci:*|ci\(*|test:*|test\(*|build:*|build\(*) CHORES="${CHORES}${ENTRY}"$'\n' ;;
+              *)              OTHER="${OTHER}${ENTRY}"$'\n' ;;
+            esac
+          done <<< "$(git log ${RANGE} --pretty=format:'%H %s' --no-merges)"
+
+          # ── Collect merged PRs for attribution ──
+          PRS=""
+          if command -v gh &>/dev/null; then
+            while IFS=$'\t' read -r number title author; do
+              [ -z "$number" ] && continue
+              PRS="${PRS}- ${title} (#${number}) @${author}"$'\n'
+            done <<< "$(gh pr list --state merged --base main --limit 20 \
+              --json number,title,author --jq '.[] | [.number, .title, .author.login] | @tsv' 2>/dev/null || true)"
+          fi
+
+          # ── Assemble release body ──
+          {
+            echo "body<<RELEASE_EOF"
+
+            # Header
+            echo "## What's Changed"
+            echo ""
+
+            # Sections — only print non-empty ones
+            if [ -n "$FEATURES" ]; then
+              echo "### 🚀 Features"
+              echo ""
+              echo "$FEATURES"
+            fi
+
+            if [ -n "$FIXES" ]; then
+              echo "### 🐛 Bug Fixes"
+              echo ""
+              echo "$FIXES"
+            fi
+
+            if [ -n "$REFACTORS" ]; then
+              echo "### ♻️ Refactors"
+              echo ""
+              echo "$REFACTORS"
+            fi
+
+            if [ -n "$DOCS" ]; then
+              echo "### 📝 Documentation"
+              echo ""
+              echo "$DOCS"
+            fi
+
+            if [ -n "$CHORES" ]; then
+              echo "### 🔧 Maintenance"
+              echo ""
+              echo "$CHORES"
+            fi
+
+            if [ -n "$OTHER" ]; then
+              echo "### 📦 Other"
+              echo ""
+              echo "$OTHER"
+            fi
+
+            # PRs section
+            if [ -n "$PRS" ]; then
+              echo "### 🔀 Merged Pull Requests"
+              echo ""
+              echo "$PRS"
+            fi
+
+            # Install instructions
+            echo "## Install / Upgrade"
+            echo ""
+            echo '```bash'
+            echo "pi install npm:pi-missions@${VERSION}"
+            echo '```'
+            echo ""
+            echo "Or from GitHub:"
+            echo ""
+            echo '```bash'
+            echo "pi install git:github.com/${{ github.repository }}"
+            echo '```'
+
+            # Full diff link
+            if [ -n "$COMPARE_URL" ]; then
+              echo ""
+              echo "**Full Changelog**: ${COMPARE_URL}"
+            fi
+
+            echo "RELEASE_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create or update draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: v${{ steps.version.outputs.version }}
+          body: ${{ steps.notes.outputs.body }}
+          draft: true
+          prerelease: false

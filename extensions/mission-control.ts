@@ -3,11 +3,10 @@
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type {
   MissionState,
-  MissionFeature,
-  ValidationAssertion,
 } from "./types.ts";
-import { formatDuration, getFeatureIcon, getPhaseIcon, truncate } from "./utils.ts";
+import { formatDuration, getPhaseIcon, truncate } from "./utils.ts";
 import { formatProgressLog } from "./progress-log.ts";
+import { showModelPicker } from "./model-picker.ts";
 
 // ---------------------------------------------------------------------------
 // Public Types
@@ -31,7 +30,6 @@ export type MissionControlResult =
 // Internal Constants
 // ---------------------------------------------------------------------------
 
-const MAX_FEATURES_SHOWN = 10;
 const MAX_LOG_EVENTS = 5;
 const SEPARATOR = "─".repeat(48);
 const HEADER_LINE = "━".repeat(48);
@@ -68,11 +66,7 @@ function buildDashboard(state: MissionState): string[] {
   lines.push("");
 
   // ── Mode-specific panels ────────────────────────────────────────────────
-  if (state.mode === "full" && state.milestones) {
-    lines.push(...buildFullModePanel(state));
-  } else {
-    lines.push(...buildSimpleModePanel(state));
-  }
+  lines.push(...buildSimpleModePanel(state));
 
   // ── Progress Log ────────────────────────────────────────────────────────
   if (state.progressLog.length > 0) {
@@ -105,12 +99,6 @@ function buildDashboard(state: MissionState): string[] {
  * Compact progress fraction, e.g. "3/8 features" or "2/6 phases".
  */
 function buildProgressSummary(state: MissionState): string {
-  if (state.mode === "full" && state.milestones) {
-    const allFeatures = state.milestones.flatMap((m) => m.features);
-    const done = allFeatures.filter((f) => f.status === "done").length;
-    return `(${done}/${allFeatures.length} features)`;
-  }
-
   const done = state.phases.filter((p) => p.status === "done").length;
   return `(${done}/${state.phases.length} phases)`;
 }
@@ -139,116 +127,6 @@ function buildSimpleModePanel(state: MissionState): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// Full Mode Panel
-// ---------------------------------------------------------------------------
-
-function buildFullModePanel(state: MissionState): string[] {
-  const lines: string[] = [];
-
-  // Current feature spotlight
-  if (state.currentFeature && state.milestones) {
-    const feature = findFeature(state.milestones.flatMap((m) => m.features), state.currentFeature);
-    if (feature) {
-      lines.push(SEPARATOR);
-      lines.push("  🔧 Current Feature");
-      lines.push(`    ${getFeatureIcon(feature.status)} ${truncate(feature.description, 50)}`);
-      lines.push(`    Milestone: ${feature.milestone}`);
-      if (feature.startedAt) {
-        lines.push(`    Elapsed: ${formatDuration(Date.now() - new Date(feature.startedAt).getTime())}`);
-      }
-      lines.push("");
-    }
-  }
-
-  // Milestones & features list
-  if (state.milestones) {
-    lines.push(SEPARATOR);
-    lines.push("  📦 Milestones & Features");
-
-    let featuresShown = 0;
-
-    for (const milestone of state.milestones) {
-      const mIcon =
-        milestone.status === "done" || milestone.status === "sealed"
-          ? "✅"
-          : milestone.status === "active"
-            ? "🔄"
-            : "⬜";
-      const doneCount = milestone.features.filter((f) => f.status === "done").length;
-      lines.push(`    ${mIcon} ${milestone.name} (${doneCount}/${milestone.features.length})`);
-
-      for (const feature of milestone.features) {
-        if (featuresShown >= MAX_FEATURES_SHOWN) {
-          const remaining =
-            state.milestones.flatMap((m) => m.features).length - MAX_FEATURES_SHOWN;
-          lines.push(`      … and ${remaining} more`);
-          return lines;
-        }
-        const fIcon = getFeatureIcon(feature.status);
-        const active = feature.id === state.currentFeature ? " ◄" : "";
-        lines.push(`      ${fIcon} ${truncate(feature.description, 42)}${active}`);
-        featuresShown++;
-      }
-    }
-  }
-
-  return lines;
-}
-
-// ---------------------------------------------------------------------------
-// Validation Panel
-// ---------------------------------------------------------------------------
-
-function buildValidationPanel(state: MissionState): string[] {
-  const lines: string[] = [];
-  const assertions = state.validationAssertions ?? [];
-
-  if (assertions.length === 0) {
-    lines.push("  No validation assertions defined.");
-    return lines;
-  }
-
-  lines.push(HEADER_LINE);
-  lines.push("  ✔ Validation Assertions");
-  lines.push(HEADER_LINE);
-  lines.push("");
-
-  const grouped = groupBy(assertions, (a) => a.area);
-
-  for (const [area, items] of Object.entries(grouped)) {
-    const passed = items.filter((a) => a.status === "passed").length;
-    lines.push(`  ${area} (${passed}/${items.length} passed)`);
-
-    for (const assertion of items) {
-      const icon = assertionIcon(assertion.status);
-      lines.push(`    ${icon} ${assertion.title}`);
-      if (assertion.evidence) {
-        lines.push(`      └ ${truncate(assertion.evidence, 50)}`);
-      }
-    }
-    lines.push("");
-  }
-
-  return lines;
-}
-
-function assertionIcon(status: ValidationAssertion["status"]): string {
-  switch (status) {
-    case "passed":
-      return "✅";
-    case "failed":
-      return "❌";
-    case "blocked":
-      return "🚫";
-    case "skipped":
-      return "⏭️";
-    case "pending":
-    default:
-      return "⬜";
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Action Menu
 // ---------------------------------------------------------------------------
 
@@ -259,7 +137,6 @@ type ActionKey =
   | "done"
   | "redirect"
   | "models"
-  | "validation"
   | "close";
 
 interface ActionOption {
@@ -282,11 +159,9 @@ function buildActions(state: MissionState): ActionOption[] {
     actions.push({ key: "pause", label: "⏸ Pause mission" });
   }
 
-  // Skip current phase/feature (only when running)
+  // Skip current phase (only when running)
   if (!state.paused && !state.completedAt) {
-    if (state.mode === "full" && state.currentFeature) {
-      actions.push({ key: "skip", label: "⏭ Skip current feature" });
-    } else if (state.phases.some((p) => p.status === "active")) {
+    if (state.phases.some((p) => p.status === "active")) {
       actions.push({ key: "skip", label: "⏭ Skip current phase" });
     }
   }
@@ -303,11 +178,6 @@ function buildActions(state: MissionState): ActionOption[] {
 
   // Model assignment
   actions.push({ key: "models", label: "🤖 Change model assignment" });
-
-  // Validation (full mode only)
-  if (state.mode === "full" && state.validationAssertions?.length) {
-    actions.push({ key: "validation", label: "✔ Validation status" });
-  }
 
   actions.push({ key: "close", label: "✕ Close" });
 
@@ -415,11 +285,6 @@ export async function showMissionControl(
         break;
       }
 
-      case "validation": {
-        await showValidation(ctx, state);
-        break;
-      }
-
       case "close":
         return { action: "close" };
     }
@@ -472,56 +337,21 @@ async function showModelAssignment(
 
   if (!choice || choice === "← Back") return false;
 
-  // Extract role from choice
+  // Extract role from choice and show searchable model picker
   const role = choice.replace("✏️ Change: ", "");
   const availableModels = callbacks.getAvailableModels!();
-  const modelLabels = availableModels.map((m) => m.label);
+  const modelOptions = [
+    { label: "(current model)", id: "" },
+    ...availableModels,
+  ];
 
-  const picked = await ctx.ui.select(`Model for "${role}"`, [
-    "(current model)",
-    ...modelLabels,
-  ]);
+  const picked = await showModelPicker(ctx, `Model for "${role}"`, modelOptions);
 
-  if (!picked || picked === "(current model)") return false;
+  if (!picked || !picked.id) return false;
 
-  const matched = availableModels.find((m) => m.label === picked);
-  if (matched && matched.id) {
-    callbacks.onModelChange!(role, matched.id);
-    ctx.ui.notify(`🤖 ${role} → ${matched.label}`, "info");
-    return true;
-  }
-
-  return false;
+  callbacks.onModelChange!(role, picked.id);
+  ctx.ui.notify(`🤖 ${role} → ${picked.label}`, "info");
+  return true;
 }
 
-/**
- * Show validation assertions in a detail view.
- */
-async function showValidation(
-  ctx: ExtensionContext,
-  state: MissionState,
-): Promise<void> {
-  const panel = buildValidationPanel(state);
-  const title = panel.join("\n");
-  await ctx.ui.select(title, ["← Back"]);
-}
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function findFeature(
-  features: MissionFeature[],
-  id: string,
-): MissionFeature | undefined {
-  return features.find((f) => f.id === id);
-}
-
-function groupBy<T>(items: T[], key: (item: T) => string): Record<string, T[]> {
-  const groups: Record<string, T[]> = {};
-  for (const item of items) {
-    const k = key(item);
-    (groups[k] ??= []).push(item);
-  }
-  return groups;
-}

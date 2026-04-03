@@ -10,11 +10,6 @@ import type { ProgressEvent } from "./types.ts";
 const EVENT_ICONS: Record<ProgressEvent["type"], string> = {
   phase_complete: "✅",
   phase_start: "🔄",
-  feature_start: "●",
-  feature_complete: "✓",
-  feature_failed: "✗",
-  milestone_start: "📦",
-  milestone_complete: "🏁",
   mission_pause: "⏸",
   mission_resume: "▶",
   mission_redirect: "↻",
