@@ -52,14 +52,27 @@ jobs:
       - name: Extract version from tag
         id: version
         run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
-      - name: Extract changelog for this version
-        id: changelog
+      - name: Publish existing draft or create from CHANGELOG
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          version="${{ steps.version.outputs.version }}"
-          awk "/^## ${version}/{found=1; next} /^## /{if(found) exit} found{print}" CHANGELOG.md > release-notes.md
-          if [ ! -s release-notes.md ]; then
-            echo "Release v${version}" > release-notes.md
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="v${VERSION}"
+
+          # Check if a draft release already exists for this tag
+          DRAFT_ID=$(gh release list --json tagName,isDraft,databaseId \
+            --jq ".[] | select(.tagName==\"${TAG}\" and .isDraft) | .databaseId" 2>/dev/null || true)
+
+          if [ -n "$DRAFT_ID" ]; then
+            # Promote the draft to published
+            gh release edit "${TAG}" --draft=false
+            echo "✅ Published existing draft release ${TAG}"
+          else
+            # Fallback: build notes from CHANGELOG.md
+            awk "/^## ${VERSION}/{found=1; next} /^## /{if(found) exit} found{print}" CHANGELOG.md > release-notes.md
+            if [ ! -s release-notes.md ]; then
+              echo "Release ${TAG}" > release-notes.md
+            fi
+            gh release create "${TAG}" --title "${TAG}" --notes-file release-notes.md
+            echo "✅ Created release ${TAG} from CHANGELOG.md"
           fi
-      - uses: softprops/action-gh-release@v2
-        with:
-          body_path: release-notes.md
