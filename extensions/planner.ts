@@ -140,6 +140,7 @@ export async function runMissionPlanner(
       ? `${description}\n\nConstraints: ${constraints}`
       : description,
     mode,
+    templateKey,
     currentPhase: phases.length > 0 ? phases[0].name : undefined,
     phases,
     autonomy,
