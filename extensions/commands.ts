@@ -384,8 +384,85 @@ export function registerMissionCommands(
     },
   });
 
+
   // -----------------------------------------------------------------------
-  // 6. /mission-reset — Clear everything
+  // 6. /mission-next — Manually advance to next phase
+  // -----------------------------------------------------------------------
+
+  pi.registerCommand("mission-next", {
+    description: "Advance to the next phase (use when auto-detection missed a transition)",
+    handler: async (_args: string, ctx: ExtensionCommandContext) => {
+      try {
+        let state = getState();
+        if (!state || state.completedAt) {
+          ctx.ui.notify("No active mission phase to advance.", "warning");
+          return;
+        }
+
+        const activePhase = state.phases.find((p) => p.status === "active");
+        if (!activePhase) {
+          ctx.ui.notify("No active phase to advance.", "warning");
+          return;
+        }
+
+        const phaseName = activePhase.name;
+        const now = new Date().toISOString();
+
+        const phases = state.phases.map((p) => ({ ...p }));
+        const activeIdx = phases.findIndex((p) => p.status === "active");
+
+        phases[activeIdx].status = "done";
+        phases[activeIdx].completedAt = now;
+
+        const next: Partial<MissionState> = { phases };
+
+        if (activeIdx + 1 < phases.length) {
+          phases[activeIdx + 1].status = "active";
+          phases[activeIdx + 1].startedAt = now;
+          next.currentPhase = phases[activeIdx + 1].name;
+        } else {
+          next.completedAt = now;
+        }
+
+        state = { ...state, ...next };
+        addProgressEvent(state, "phase_complete", `Manually advanced from: ${phaseName}`);
+        persist(ctx, state);
+
+        const nextPhase = state.phases.find((p) => p.status === "active");
+        if (state.completedAt) {
+          pi.setSessionName(`✅ ${state.description}`);
+          ctx.ui.notify("🎉 Mission complete!", "info");
+        } else {
+          ctx.ui.notify(
+            `✅ ${phaseName} done → ${nextPhase?.emoji ?? "📋"} ${nextPhase?.name ?? "—"}`,
+            "info",
+          );
+
+          // Auto-switch model if assignment exists for the new phase/role
+          try {
+            const { PHASE_ROLE_MAP } = await import("./config.ts");
+            if (Object.keys(state.modelAssignment).length > 0) {
+              const role = PHASE_ROLE_MAP[nextPhase?.name ?? ""];
+              if (role && state.modelAssignment[role]) {
+                const allModels = ctx.modelRegistry.getAll();
+                const model = allModels.find(
+                  (m: any) => m.id === state.modelAssignment[role] || m.id.includes(state.modelAssignment[role]),
+                );
+                if (model) await pi.setModel(model as any);
+              }
+            }
+          } catch {
+            // Model switch failed — continue with current model
+          }
+        }
+      } catch (err: any) {
+        ctx.ui.notify(`Error in /mission-next: ${err.message}`, "error");
+      }
+    },
+  });
+
+  // -----------------------------------------------------------------------
+  // 7. /mission-reset — Clear everything
   // -----------------------------------------------------------------------
 
   pi.registerCommand("mission-reset", {
