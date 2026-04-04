@@ -118,7 +118,7 @@ export const MISSION_TEMPLATES: Record<string, MissionTemplate> = {
   minimal: {
     name: "Minimal",
     description: "3-phase quick mission: plan, build, verify",
-    mode: "simple",
+    mode: "minimal",
     phases: DEFAULT_MINIMAL_PHASES,
   },
 };

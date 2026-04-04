@@ -331,7 +331,7 @@ function buildSimpleModeProtocol(state: MissionState): string {
   const lines: string[] = [
     `# 🎯 Active Mission: ${state.description}`,
     "",
-    `**Mode:** ${state.mode} | **Progress:** ${completedCount}/${totalCount} phases | **Autonomy:** ${state.autonomy}`,
+    `**Mode:** ${state.mode === "minimal" ? "Minimal" : "Standard"} | **Progress:** ${completedCount}/${totalCount} phases | **Autonomy:** ${state.autonomy}`,
     "",
     "## Mission Phases",
     "",
@@ -384,6 +384,12 @@ function buildSimpleModeProtocol(state: MissionState): string {
     `- Say: "Phase ${state.phases.findIndex((p) => p.status === "active") + 1} complete" or "${activePhase?.name ?? "current"} phase complete"`,
   );
   lines.push(
+    "- **IMPORTANT**: You MUST explicitly say \"[Phase Name] complete\" or \"Phase [N] complete\" when finishing a phase. Without this, the progress tracker cannot advance.",
+  );
+  lines.push(
+    "- Phrases that work: \"Plan complete\", \"Phase 1 complete\", \"I've completed the plan\", \"Done with the plan\", \"That concludes the plan\"",
+  );
+  lines.push(
     "- Do NOT skip phases or work on a future phase before the current one is done.",
   );
   lines.push(
@@ -416,7 +422,8 @@ export function buildMissionStatus(state: MissionState): string {
   }
 
   const done = state.phases.filter((p) => p.status === "done").length;
-  lines.push(`**Mode:** ${state.mode === "simple" ? "Standard" : "Minimal"}`);
+  const modeLabel = state.mode === "minimal" ? "Minimal" : "Standard";
+  lines.push(`**Mode:** ${modeLabel}`);
   lines.push(`**Progress:** ${done}/${state.phases.length} phases`);
 
   if (state.currentPhase) {
