@@ -6,7 +6,7 @@ import type {
 } from "./types.ts";
 import { formatDuration, getPhaseIcon, truncate } from "./utils.ts";
 import { formatProgressLog } from "./progress-log.ts";
-import { showModelPicker } from "./model-picker.ts";
+import { showRoleModelAssigner } from "./role-assigner.ts";
 
 // ---------------------------------------------------------------------------
 // Public Types
@@ -296,62 +296,67 @@ export async function showMissionControl(
 // ---------------------------------------------------------------------------
 
 /**
- * Show model assignment as a read-only panel (or editable in future).
+ * Infer template key from state — uses stored templateKey or falls back
+ * to phase count heuristic for backward compatibility.
+ */
+function inferTemplateKey(state: MissionState): string {
+  if (state.templateKey) return state.templateKey;
+  // Backward compat: minimal has 3 phases, standard has 6
+  return state.phases.length <= 3 ? "minimal" : "standard";
+}
+
+/**
+ * Show the tabbed, searchable model assigner (same UI as initial setup)
+ * pre-populated with the current model assignments.
  */
 async function showModelAssignment(
   ctx: ExtensionContext,
   state: MissionState,
   callbacks: MissionControlCallbacks,
 ): Promise<boolean> {
-  const models = Object.entries(state.modelAssignment);
-  const canEdit = !!callbacks.onModelChange && !!callbacks.getAvailableModels;
-
-  // Build display
-  const lines: string[] = [
-    HEADER_LINE,
-    "  🤖 Model Assignment",
-    HEADER_LINE,
-    "",
-  ];
-
-  if (models.length === 0) {
-    lines.push("  No model assignments configured.");
-    lines.push("  Models default to the current session model.");
-  } else {
-    for (const [role, modelId] of models) {
-      lines.push(`  ${role}: ${modelId}`);
-    }
-  }
-  lines.push("");
-
-  const title = lines.join("\n");
+  const canEdit = !!callbacks.onModelChange;
 
   if (!canEdit) {
-    await ctx.ui.select(title, ["← Back"]);
+    // Read-only fallback
+    const models = Object.entries(state.modelAssignment);
+    const lines = [
+      HEADER_LINE,
+      "  \uD83E\uDD16 Model Assignment",
+      HEADER_LINE,
+      "",
+      ...(models.length > 0
+        ? models.map(([role, modelId]) => `  ${role}: ${modelId}`)
+        : ["  No model assignments configured."]),
+      "",
+    ];
+    await ctx.ui.select(lines.join("\n"), ["\u2190 Back"]);
     return false;
   }
 
-  // Build editable options: one per role + back
-  const roleOptions = models.map(([role]) => `✏️ Change: ${role}`);
-  const choice = await ctx.ui.select(title, [...roleOptions, "← Back"]);
+  const templateKey = inferTemplateKey(state);
 
-  if (!choice || choice === "← Back") return false;
+  // Reuse the same tabbed, searchable assigner with current assignments
+  const updated = await showRoleModelAssigner(
+    ctx as any, // ExtensionContext is a superset at runtime
+    templateKey,
+    state.modelAssignment,
+  );
 
-  // Extract role from choice and show searchable model picker
-  const role = choice.replace("✏️ Change: ", "");
-  const availableModels = callbacks.getAvailableModels!();
-  const modelOptions = [
-    { label: "(current model)", id: "" },
-    ...availableModels,
-  ];
+  if (!updated) return false;
 
-  const picked = await showModelPicker(ctx, `Model for "${role}"`, modelOptions);
+  // Apply changes for each role that differs
+  let changed = false;
+  for (const [role, modelId] of Object.entries(updated)) {
+    if (modelId && modelId !== state.modelAssignment[role]) {
+      callbacks.onModelChange!(role, modelId);
+      changed = true;
+    }
+  }
 
-  if (!picked || !picked.id) return false;
-
-  callbacks.onModelChange!(role, picked.id);
-  ctx.ui.notify(`🤖 ${role} → ${picked.label}`, "info");
-  return true;
+  if (changed) {
+    ctx.ui.notify("\uD83E\uDD16 Model assignments updated.", "info");
+  }
+  return changed;
 }
 
 

@@ -79,6 +79,8 @@ export interface MissionState {
   description: string;
   /** Operating mode that governs which fields are active. */
   mode: MissionMode;
+  /** Template key used to create this mission (for role group lookup). */
+  templateKey?: string;
 
   // -- Simple-mode fields ---------------------------------------------------
   /** Name of the currently active phase (simple mode). */

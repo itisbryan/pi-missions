@@ -111,12 +111,19 @@ const MAX_VISIBLE = 8;
  * The user picks a model per group. When all groups are assigned,
  * the overlay auto-closes and returns the full ModelAssignment.
  *
+ * In "edit mode" (when `currentAssignment` is provided), tabs are
+ * pre-populated with the existing models. The user can re-assign any
+ * tab and press Esc to confirm without changing everything.
+ *
+ * @param currentAssignment  Optional existing assignment for edit mode
  * @returns ModelAssignment mapping each role → model ID, or null if cancelled
  */
 export async function showRoleModelAssigner(
   ctx: ExtensionCommandContext,
   templateKey: string,
+  currentAssignment?: ModelAssignment,
 ): Promise<ModelAssignment | null> {
+  const isEditMode = !!currentAssignment && Object.keys(currentAssignment).length > 0;
   const groups = getRoleGroups(templateKey);
   const modelOptions = getAvailableModelOptions(ctx).filter((m) => m.id);
   const allItems: SelectItem[] = modelOptions.map((m) => ({
@@ -130,6 +137,19 @@ export async function showRoleModelAssigner(
     // ── State ──────────────────────────────────────────────────────────
     let activeTab = 0;
     const assigned = new Map<number, SelectItem>();
+
+    // Pre-populate in edit mode — match current assignments to items
+    if (isEditMode && currentAssignment) {
+      for (let i = 0; i < groups.length; i++) {
+        // Find the model assigned to the first role of this group
+        const firstRole = groups[i].roles[0];
+        const modelId = currentAssignment[firstRole];
+        if (modelId) {
+          const item = allItems.find((it) => it.value === modelId);
+          if (item) assigned.set(i, item);
+        }
+      }
+    }
 
     // ── Build container ────────────────────────────────────────────────
     const container = new Container();
@@ -160,13 +180,12 @@ export async function showRoleModelAssigner(
     const summaryText = new Text("", 1, 0);
     container.addChild(summaryText);
 
-    // Key hints
+    // Key hints — edit mode shows different Esc behavior
+    const hintText = isEditMode
+      ? "↑↓ navigate · Enter select · Tab switch · Esc confirm"
+      : "↑↓ navigate · Enter select · Tab switch · Esc cancel";
     container.addChild(
-      new Text(
-        theme.fg("dim", "↑↓ navigate · Enter select · Tab switch · Esc cancel"),
-        1,
-        0,
-      ),
+      new Text(theme.fg("dim", hintText), 1, 0),
     );
     container.addChild(new Spacer(1));
 
@@ -192,11 +211,47 @@ export async function showRoleModelAssigner(
       return sl;
     }
 
+    /** Build the item list with "quick pick" models from other tabs at the top. */
+    function buildItemsWithQuickPick(): SelectItem[] {
+      // Collect models assigned to OTHER tabs
+      const otherModels = new Map<string, string[]>(); // modelId → group labels
+      for (let i = 0; i < groups.length; i++) {
+        if (i === activeTab) continue;
+        const item = assigned.get(i);
+        if (!item) continue;
+        const labels = otherModels.get(item.value) ?? [];
+        labels.push(groups[i].label);
+        otherModels.set(item.value, labels);
+      }
+
+      if (otherModels.size === 0) return [...allItems];
+
+      // Build quick-pick section
+      const quickPicks: SelectItem[] = [];
+      const quickPickIds = new Set<string>();
+      for (const [modelId, groupLabels] of otherModels) {
+        const original = allItems.find((it) => it.value === modelId);
+        if (original) {
+          quickPicks.push({
+            value: original.value,
+            label: `★ ${original.label}  (${groupLabels.join(", ")})`,
+          });
+          quickPickIds.add(modelId);
+        }
+      }
+
+      // Remaining items (exclude quick-picked ones to avoid duplicates)
+      const rest = allItems.filter((it) => !quickPickIds.has(it.value));
+
+      return [...quickPicks, ...rest];
+    }
+
     function rebuildList() {
+      const baseItems = buildItemsWithQuickPick();
       const query = searchInput.getValue();
       currentItems = query
-        ? fuzzyFilter(allItems, query, (item) => `${item.label} ${item.value}`)
-        : [...allItems];
+        ? fuzzyFilter(baseItems, query, (item) => `${item.label} ${item.value}`)
+        : baseItems;
       selectList = buildSelectList(currentItems);
       listContainer.clear();
       listContainer.addChild(selectList);
@@ -234,8 +289,22 @@ export async function showRoleModelAssigner(
       summaryText.setText(lines.length > 0 ? lines.join("\n") : "");
     }
 
+    /** Build the final ModelAssignment from the assigned map. */
+    function buildResult(): ModelAssignment {
+      const result: ModelAssignment = {};
+      for (const [groupIdx, model] of assigned) {
+        for (const role of groups[groupIdx].roles) {
+          result[role] = model.value;
+        }
+      }
+      return result;
+    }
+
     function handleModelSelect(item: SelectItem) {
-      assigned.set(activeTab, item);
+      // Strip quick-pick prefix for storage — map back to original item
+      const cleanValue = item.value;
+      const original = allItems.find((it) => it.value === cleanValue) ?? item;
+      assigned.set(activeTab, original);
 
       // Find next unassigned group
       let next = -1;
@@ -255,15 +324,18 @@ export async function showRoleModelAssigner(
         updateTabBar();
         updateSummary();
         tui.requestRender();
+      } else if (isEditMode) {
+        // Edit mode: all assigned, stay open so user can keep changing
+        // Advance to next tab for convenience
+        activeTab = (activeTab + 1) % groups.length;
+        searchInput.setValue("");
+        rebuildList();
+        updateTabBar();
+        updateSummary();
+        tui.requestRender();
       } else {
-        // All assigned — build result and close
-        const result: ModelAssignment = {};
-        for (const [groupIdx, model] of assigned) {
-          for (const role of groups[groupIdx].roles) {
-            result[role] = model.value;
-          }
-        }
-        done(result);
+        // Init mode: all assigned — close
+        done(buildResult());
       }
     }
 
@@ -306,12 +378,15 @@ export async function showRoleModelAssigner(
           switchTab(-1);
           return;
         }
-        // Escape → cancel (or clear search first)
+        // Escape → clear search first, then cancel (init) or confirm (edit)
         if (matchesKey(data, Key.escape)) {
           if (searchInput.getValue()) {
             searchInput.setValue("");
             rebuildList();
             tui.requestRender();
+          } else if (isEditMode) {
+            // Edit mode: Esc confirms current assignments
+            done(buildResult());
           } else {
             done(null);
           }
