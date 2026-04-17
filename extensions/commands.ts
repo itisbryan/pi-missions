@@ -9,10 +9,11 @@ import { Key } from "@mariozechner/pi-tui";
 import type { MissionState } from "./types.ts";
 import type { MissionControlCallbacks, MissionControlResult } from "./mission-control.ts";
 import { saveMissionState, addProgressEvent } from "./state.ts";
-import { formatDuration, getPhaseIcon } from "./utils.ts";
+import { formatDuration, getPhaseIcon, truncate } from "./utils.ts";
 // config.ts exports are used via planner.ts at runtime
 import { runMissionPlanner } from "./planner.ts";
-import { updateWidget as updateMissionWidget } from "./widget.ts";
+import { updateWidget as updateMissionWidget, buildThemedProgressBar } from "./widget.ts";
+import { AgentAnimator, getRoleForPhase, renderAgent } from "./agent-ascii.ts";
 
 // ---------------------------------------------------------------------------
 // Forward declaration — mission-control.ts will provide this
@@ -139,7 +140,7 @@ export function registerMissionCommands(
   });
 
   // -----------------------------------------------------------------------
-  // 2. /mission-status — Detailed status via ctx.ui.select()
+  // 2. /mission-status — Themed overlay with animated agent
   // -----------------------------------------------------------------------
 
   pi.registerCommand("mission-status", {
@@ -155,52 +156,129 @@ export function registerMissionCommands(
           return;
         }
 
-        const elapsed = formatDuration(
-          Date.now() - new Date(state.startedAt).getTime(),
-        );
-        const lines: string[] = [
-          `Mission: ${state.description}`,
-          `Mode: ${state.mode}`,
-          `Elapsed: ${elapsed}`,
-          `Autonomy: ${state.autonomy}`,
-        ];
-
-        // Model assignment
-        const models = Object.entries(state.modelAssignment);
-        if (models.length > 0) {
-          lines.push("");
-          lines.push("Model Assignment:");
-          for (const [role, model] of models) {
-            lines.push(`  ${role} → ${model}`);
+        await ctx.ui.custom<void>((tui, theme, _kb, done) => {
+          // Start animator for active missions
+          const animator = new AgentAnimator(500);
+          if (!state.completedAt && !state.paused) {
+            animator.start(tui);
           }
-        }
 
-        if (state.completedAt) {
-          const totalDuration = formatDuration(
-            new Date(state.completedAt).getTime() -
-              new Date(state.startedAt).getTime(),
-          );
-          lines.push(`Completed in: ${totalDuration}`);
-        }
+          let cachedWidth: number | undefined;
+          let cachedLines: string[] | undefined;
 
-        lines.push("");
+          return {
+            render(width: number): string[] {
+              if (cachedLines && cachedWidth === width) {
+                return cachedLines;
+              }
 
-        lines.push("Phases:");
-        for (let i = 0; i < state.phases.length; i++) {
-          const p = state.phases[i];
-          const icon = getPhaseIcon(p.status);
-          let dur = "";
-          if (p.startedAt && p.completedAt) {
-            dur = ` (${formatDuration(new Date(p.completedAt).getTime() - new Date(p.startedAt).getTime())})`;
-          } else if (p.startedAt) {
-            dur = ` (${formatDuration(Date.now() - new Date(p.startedAt).getTime())} elapsed)`;
-          }
-          lines.push(
-            `  ${icon} Phase ${i + 1}: ${p.emoji} ${p.name}${dur}`,
-          );
-        }
+              const t = theme;
+              const s = state;
+              const lines: string[] = [];
+              const elapsed = formatDuration(Date.now() - new Date(s.startedAt).getTime());
 
-        await ctx.ui.select("Mission Status", lines);
+              // ── Top border ──────────────────────────────────────────────
+              lines.push(t.fg("accent", "━".repeat(width)));
+              lines.push(`  ${t.fg("accent", t.bold("📋 M I S S I O N   S T A T U S"))}`);
+              lines.push(t.fg("accent", "━".repeat(width)));
+              lines.push("");
+
+              // ── Agent sprite + description (side by side) ────────────────
+              const activePhase = s.phases.find((p) => p.status === "active");
+              const role = activePhase ? getRoleForPhase(activePhase.name) : "coder";
+              const spriteState = s.paused ? "paused" as const
+                : s.completedAt ? "completed" as const
+                : "working" as const;
+              const frame = animator.currentFrame;
+              const spriteLines = renderAgent(role, frame, "full", spriteState);
+
+              const desc = truncate(s.description, width - 16);
+              const modeLabel = s.mode === "minimal" ? "Minimal" : "Standard";
+
+              // Merge sprite (9 lines) + info side by side
+              const infoLines = [
+                `${t.fg("accent", t.bold(desc))}`,
+                `  ${t.fg("muted", "Mode:")} ${t.fg("text", modeLabel)}  ${t.fg("muted", "│")}  ${t.fg("muted", "Autonomy:")} ${t.fg("text", s.autonomy)}  ${t.fg("muted", "│")}  ${t.fg("muted", "Elapsed:")} ${t.fg("text", elapsed)}`,
+              ];
+
+              if (s.completedAt) {
+                const totalDuration = formatDuration(
+                  new Date(s.completedAt).getTime() - new Date(s.startedAt).getTime(),
+                );
+                infoLines.push(`  ${t.fg("success", `🎉 Completed in ${totalDuration}`)}`);
+              } else if (activePhase) {
+                const phaseElapsed = activePhase.startedAt
+                  ? formatDuration(Date.now() - new Date(activePhase.startedAt).getTime())
+                  : "";
+                infoLines.push(`  ${t.fg("accent", `${activePhase.emoji} ${activePhase.name}`)} ${t.fg("dim", phaseElapsed ? `(${phaseElapsed})` : "")}`);
+              }
+
+              // Pad sprite or info to match heights
+              const maxLines = Math.max(spriteLines.length, infoLines.length);
+              for (let i = 0; i < maxLines; i++) {
+                const sprite = i < spriteLines.length ? spriteLines[i] : " ".repeat(11);
+                const info = i < infoLines.length ? infoLines[i] : "";
+                lines.push(` ${sprite}  ${info}`);
+              }
+              lines.push("");
+
+              // ── Progress bar ─────────────────────────────────────────────
+              const bar = buildThemedProgressBar(s.phases, t);
+              const doneCount = s.phases.filter((p) => p.status === "done").length;
+              const totalCount = s.phases.length;
+              lines.push(`  ${bar.themed} ${t.fg("accent", `${bar.percentage}%`)}  ${t.fg("dim", `(${doneCount}/${totalCount} phases)`)}`);
+
+              // ── Phase list ───────────────────────────────────────────────
+              lines.push("");
+              lines.push(t.fg("muted", "─".repeat(width)));
+              lines.push(`  ${t.fg("text", t.bold("Phases"))}`);
+
+              for (let i = 0; i < s.phases.length; i++) {
+                const p = s.phases[i];
+                const icon = getPhaseIcon(p.status);
+                const active = p.status === "active" ? t.fg("accent", " ◄") : "";
+                let dur = "";
+                if (p.startedAt && p.completedAt) {
+                  dur = t.fg("dim", ` (${formatDuration(new Date(p.completedAt).getTime() - new Date(p.startedAt).getTime())})`);
+                } else if (p.startedAt) {
+                  dur = t.fg("dim", ` (${formatDuration(Date.now() - new Date(p.startedAt).getTime())} elapsed)`);
+                }
+                lines.push(`    ${icon} ${p.emoji} ${p.name}${dur}${active}`);
+              }
+
+              // ── Model Assignment ──────────────────────────────────────────
+              const models = Object.entries(s.modelAssignment);
+              if (models.length > 0) {
+                lines.push(t.fg("muted", "─".repeat(width)));
+                lines.push(`  ${t.fg("text", t.bold("🤖 Models"))}`);
+                for (const [role, model] of models) {
+                  lines.push(`    ${t.fg("muted", `${role}:`)} ${model}`);
+                }
+              }
+
+              // ── Footer ───────────────────────────────────────────────────
+              lines.push(t.fg("muted", "─".repeat(width)));
+              lines.push(`  ${t.fg("dim", "Press any key or Esc to close")}`);
+              lines.push("");
+              lines.push(t.fg("accent", "━".repeat(width)));
+
+              cachedWidth = width;
+              cachedLines = lines;
+              return lines;
+            },
+
+            invalidate(): void {
+              cachedWidth = undefined;
+              cachedLines = undefined;
+            },
+
+            handleInput(_data: string): void {
+              // Any key closes
+              animator.stop();
+              done(undefined);
+            },
+          };
+        });
       } catch (err: any) {
         ctx.ui.notify(`Error in /mission-status: ${err.message}`, "error");
       }
@@ -490,6 +568,65 @@ export function registerMissionCommands(
         ctx.ui.notify("Mission cleared.", "info");
       } catch (err: any) {
         ctx.ui.notify(`Error in /mission-reset: ${err.message}`, "error");
+      }
+    },
+  });
+
+  // -----------------------------------------------------------------------
+  // 8. /mission-resume — Inject handoff and resume agent
+  // -----------------------------------------------------------------------
+
+  pi.registerCommand("mission-resume", {
+    description: "Resume the mission with full context handoff (use after /compact or token limit)",
+    handler: async (_args: string, ctx: ExtensionCommandContext) => {
+      try {
+        const state = getState();
+        if (!state) {
+          ctx.ui.notify(
+            "No active mission. Use /mission <description> to start one.",
+            "info",
+          );
+          return;
+        }
+        if (state.completedAt) {
+          ctx.ui.notify("Mission already completed. Start a new one with /mission.", "info");
+          return;
+        }
+
+        // Unpause if paused
+        if (state.paused) {
+          const now = new Date().toISOString();
+          const pauseEntry = state.pausedAt
+            ? { pausedAt: state.pausedAt, resumedAt: now }
+            : undefined;
+          const updated: MissionState = {
+            ...state,
+            paused: false,
+            pausedAt: undefined,
+            pauseHistory: pauseEntry
+              ? [...state.pauseHistory, pauseEntry]
+              : state.pauseHistory,
+          };
+          addProgressEvent(updated, "mission_resume", "Mission resumed via /mission-resume");
+          persist(ctx, updated);
+          ctx.ui.notify("▶ Mission resumed", "info");
+        }
+
+        // Build handoff and send as user message
+        const { buildMissionHandoff } = await import("./protocol.ts");
+        const handoff = buildMissionHandoff(getState() ?? state);
+        const activePhase = (getState() ?? state).phases.find((p) => p.status === "active");
+        const phaseName = activePhase?.name ?? "current";
+
+        const message =
+          `Resume the mission. You are in the "${phaseName}" phase.\n\n` +
+          `Here is the mission handoff context:\n\n${handoff}\n\n` +
+          `Pick up where you left off. Do NOT restart or re-analyze.`;
+
+        pi.sendUserMessage(message);
+        ctx.ui.notify("🔄 Mission resumed with full context handoff", "info");
+      } catch (err: any) {
+        ctx.ui.notify(`Error in /mission-resume: ${err.message}`, "error");
       }
     },
   });

@@ -25,7 +25,7 @@ import type { MissionState } from "./types.ts";
 import { restoreMissionState, saveMissionState, advancePhase, addProgressEvent } from "./state.ts";
 import { updateWidget } from "./widget.ts";
 import { detectPhaseTransition } from "./detector.ts";
-import { buildMissionProtocol, buildMissionStatus } from "./protocol.ts";
+import { buildMissionProtocol, buildMissionStatus, buildMissionHandoff } from "./protocol.ts";
 import { extractTextFromMessage } from "./utils.ts";
 import { registerMissionCommands } from "./commands.ts";
 import { PHASE_ROLE_MAP } from "./config.ts";
@@ -177,6 +177,8 @@ export default function missionExtension(pi: ExtensionAPI) {
 
   // -------------------------------------------------------------------
   // System prompt injection — adds protocol + live status
+  // Also injects handoff summary if mission has been running a while,
+  // ensuring the agent always has context even post-compaction.
   // -------------------------------------------------------------------
 
   pi.on("before_agent_start", async (event, _ctx) => {
@@ -186,16 +188,44 @@ export default function missionExtension(pi: ExtensionAPI) {
       const protocol = buildMissionProtocol(mission);
       const status = buildMissionStatus(mission);
 
-      return {
-        systemPrompt:
-          event.systemPrompt +
-          "\n\n---\n\n" +
-          protocol +
-          "\n\n" +
-          status,
-      };
+      // Always inject the mission protocol + status
+      let systemPrompt =
+        event.systemPrompt +
+        "\n\n---\n\n" +
+        protocol +
+        "\n\n" +
+        status;
+
+      // Inject handoff summary if the mission has been running long
+      // enough that compaction may have occurred (any active mission
+      // with phases completed — the plan details could be lost).
+      const doneCount = mission.phases.filter((p) => p.status === "done").length;
+      if (doneCount > 0 && !mission.paused) {
+        const handoff = buildMissionHandoff(mission);
+        systemPrompt += "\n\n---\n\n" + handoff;
+      }
+
+      return { systemPrompt };
     } catch (err) {
       console.error("[pi-mission] before_agent_start failed:", err);
+    }
+  });
+
+  // -------------------------------------------------------------------
+  // Compaction handler — bake mission handoff into compaction summary
+  // This ensures mission context survives even after token-limit hits.
+  // -------------------------------------------------------------------
+
+  pi.on("session_before_compact", async (_event) => {
+    try {
+      if (!mission || mission.completedAt) return;
+
+      // The handoff is already injected via before_agent_start above,
+      // so this handler serves as a future integration point for
+      // custom compaction when pi's API supports it more fully.
+      // For now, the before_agent_start injection is the primary mechanism.
+    } catch (err) {
+      console.error("[pi-mission] session_before_compact failed:", err);
     }
   });
 

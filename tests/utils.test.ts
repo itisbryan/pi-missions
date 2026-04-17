@@ -6,6 +6,8 @@ import {
   truncate,
   generateId,
 } from "../extensions/utils.ts";
+import { buildThemedProgressBar } from "../extensions/widget.ts";
+import type { MissionPhase } from "../extensions/types.ts";
 
 // ---------------------------------------------------------------------------
 // formatDuration
@@ -129,5 +131,59 @@ describe("generateId", () => {
 
   it("contains a hyphen separator", () => {
     expect(generateId()).toContain("-");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildThemedProgressBar
+// ---------------------------------------------------------------------------
+
+// Minimal mock theme that just returns the text unstyled
+const mockTheme = { fg: (_color: string, text: string) => text };
+
+function phase(name: string, status: MissionPhase["status"]): MissionPhase {
+  return { name, emoji: "📋", status };
+}
+
+describe("buildThemedProgressBar", () => {
+  it("returns 0% for all pending phases", () => {
+    const bar = buildThemedProgressBar(
+      [phase("A", "pending"), phase("B", "pending"), phase("C", "pending")],
+      mockTheme,
+    );
+    expect(bar.percentage).toBe(0);
+    expect(bar.plain).toBe("───");
+  });
+
+  it("returns 100% for all done phases", () => {
+    const bar = buildThemedProgressBar(
+      [phase("A", "done"), phase("B", "done"), phase("C", "done")],
+      mockTheme,
+    );
+    expect(bar.percentage).toBe(100);
+    expect(bar.plain).toBe("━━━");
+  });
+
+  it("shows correct characters per status", () => {
+    const bar = buildThemedProgressBar(
+      [phase("A", "done"), phase("B", "active"), phase("C", "pending"), phase("D", "skipped")],
+      mockTheme,
+    );
+    expect(bar.plain).toBe("━╍─┄");
+    expect(bar.percentage).toBe(25);
+  });
+
+  it("returns empty bar for zero phases", () => {
+    const bar = buildThemedProgressBar([], mockTheme);
+    expect(bar.plain).toBe("");
+    expect(bar.percentage).toBe(0);
+  });
+
+  it("calculates percentage correctly", () => {
+    const bar = buildThemedProgressBar(
+      [phase("A", "done"), phase("B", "done"), phase("C", "active")],
+      mockTheme,
+    );
+    expect(bar.percentage).toBe(67); // 2/3 = 66.67 → rounds to 67
   });
 });

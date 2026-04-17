@@ -13,7 +13,7 @@ import {
   DEFAULT_MINIMAL_PHASES,
   PHASE_ROLE_MAP,
 } from "./config.ts";
-import { getPhaseIcon } from "./utils.ts";
+import { getPhaseIcon, formatDuration } from "./utils.ts";
 
 // ---------------------------------------------------------------------------
 // Phase instruction lookup
@@ -585,6 +585,127 @@ function buildPauseNotice(state: MissionState): string {
   if (state.pausedAt) {
     lines.push("");
     lines.push(`*Paused at: ${state.pausedAt}*`);
+  }
+
+  return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Mission Handoff — for compaction / token-limit recovery
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a structured handoff summary from the current mission state.
+ *
+ * This summary is designed to be injected after compaction so the agent
+ * can resume without re-analyzing the codebase. It captures:
+ *   - Current phase position and elapsed time
+ *   - Completed phases with durations
+ *   - Plan artifacts (if captured during Architect phase)
+ *   - Recent progress log
+ *   - Resume instructions
+ *
+ * Target size: <2000 tokens
+ */
+export function buildMissionHandoff(state: MissionState): string {
+  const lines: string[] = [];
+  const totalElapsed = formatDuration(
+    Date.now() - new Date(state.startedAt).getTime(),
+  );
+
+  // ── Header ──────────────────────────────────────────────────────────────
+  lines.push("## Mission Handoff — " + state.description);
+  lines.push("");
+
+  // ── Current Position ────────────────────────────────────────────────────
+  const activeIdx = state.phases.findIndex((p) => p.status === "active");
+  const doneCount = state.phases.filter((p) => p.status === "done").length;
+  const activePhase = activeIdx >= 0 ? state.phases[activeIdx] : null;
+  const phaseElapsed = activePhase?.startedAt
+    ? formatDuration(Date.now() - new Date(activePhase.startedAt).getTime())
+    : "";
+
+  lines.push("### Current Position");
+  if (activePhase) {
+    lines.push(
+      `Phase: ${activeIdx + 1}/${state.phases.length} ${activePhase.name} (active, ${phaseElapsed} elapsed)`,
+    );
+  }
+  lines.push(`Mode: ${state.mode} | Autonomy: ${state.autonomy}`);
+  lines.push(`Total elapsed: ${totalElapsed}`);
+  lines.push(`Progress: ${doneCount}/${state.phases.length} phases complete`);
+  lines.push("");
+
+  // ── Phase History ───────────────────────────────────────────────────────
+  lines.push("### Phase History");
+  for (let i = 0; i < state.phases.length; i++) {
+    const p = state.phases[i];
+    const icon = getPhaseIcon(p.status);
+    let dur = "";
+    if (p.startedAt && p.completedAt) {
+      dur = ` (${formatDuration(new Date(p.completedAt).getTime() - new Date(p.startedAt).getTime())})`;
+    } else if (p.startedAt) {
+      dur = ` (${formatDuration(Date.now() - new Date(p.startedAt).getTime())} elapsed)`;
+    }
+    const marker = p.status === "active" ? " ← CURRENT" : "";
+    lines.push(`${icon} Phase ${i + 1}: ${p.emoji} ${p.name}${dur}${marker}`);
+  }
+  lines.push("");
+
+  // ── Plan Artifacts ──────────────────────────────────────────────────────
+  if (state.planArtifacts) {
+    const pa = state.planArtifacts;
+    lines.push("### Plan (from Architect phase)");
+    lines.push(pa.summary);
+    lines.push("");
+
+    if (pa.filesToCreate.length > 0) {
+      lines.push(`Files to create: ${pa.filesToCreate.join(", ")}`);
+    }
+    if (pa.filesToModify.length > 0) {
+      lines.push(`Files to modify: ${pa.filesToModify.join(", ")}`);
+    }
+    if (pa.keyDecisions.length > 0) {
+      lines.push("Key decisions:");
+      for (const d of pa.keyDecisions) {
+        lines.push(`- ${d}`);
+      }
+    }
+    if (pa.approvedAt) {
+      lines.push(`Plan approved at: ${pa.approvedAt}`);
+    }
+    lines.push("");
+  }
+
+  // ── Recent Activity ─────────────────────────────────────────────────────
+  const recentEvents = state.progressLog.slice(-10);
+  if (recentEvents.length > 0) {
+    lines.push("### Recent Activity");
+    for (const evt of recentEvents) {
+      lines.push(`- ${evt.detail}`);
+    }
+    lines.push("");
+  }
+
+  // ── Resume Instructions ─────────────────────────────────────────────────
+  lines.push("### Resume Instructions");
+  if (activePhase) {
+    const roleName = PHASE_ROLE_MAP[activePhase.name] ?? "worker";
+    const phaseInstructions = getPhaseInstructions(activePhase.name);
+    lines.push(`You are in phase "${activePhase.name}" (role: ${roleName}).`);
+    lines.push(
+      "The context window was compacted. Do NOT restart or re-analyze.",
+    );
+    lines.push("Pick up exactly where you left off.");
+    lines.push("");
+    if (phaseInstructions.length > 0) {
+      lines.push("Phase instructions:");
+      for (const instr of phaseInstructions) {
+        lines.push(`- ${instr}`);
+      }
+    }
+  } else {
+    lines.push("No active phase — the mission may be complete or paused.");
   }
 
   return lines.join("\n");

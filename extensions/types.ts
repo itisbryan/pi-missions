@@ -45,6 +45,24 @@ export interface MissionPhase {
 }
 
 // ---------------------------------------------------------------------------
+// Plan Artifacts
+// ---------------------------------------------------------------------------
+
+/** Structured plan data captured from the Architect/Planning phase output. */
+export interface PlanArtifacts {
+  /** High-level plan overview text. */
+  summary: string;
+  /** Files the plan intends to create. */
+  filesToCreate: string[];
+  /** Files the plan intends to modify. */
+  filesToModify: string[];
+  /** Key decisions or trade-offs documented in the plan. */
+  keyDecisions: string[];
+  /** ISO-8601 timestamp when the user approved the plan. */
+  approvedAt?: string;
+}
+
+// ---------------------------------------------------------------------------
 // Events & Logging
 // ---------------------------------------------------------------------------
 
@@ -103,6 +121,9 @@ export interface MissionState {
 
   /** Append-only log of everything notable that happened. */
   progressLog: ProgressEvent[];
+
+  /** Structured plan data captured from the Architect phase. */
+  planArtifacts?: PlanArtifacts;
 
   /** ISO-8601 timestamp when the mission was created. */
   startedAt: string;

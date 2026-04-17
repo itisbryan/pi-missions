@@ -35,6 +35,14 @@ const ProgressEventSchema = Type.Object({
   detail: Type.String(),
 });
 
+const PlanArtifactsSchema = Type.Object({
+  summary: Type.String(),
+  filesToCreate: Type.Array(Type.String()),
+  filesToModify: Type.Array(Type.String()),
+  keyDecisions: Type.Array(Type.String()),
+  approvedAt: Type.Optional(Type.String()),
+});
+
 const PauseEntrySchema = Type.Object({
   pausedAt: Type.String(),
   resumedAt: Type.String(),
@@ -63,6 +71,8 @@ export const MissionStateSchema = Type.Object({
   pauseHistory: Type.Array(PauseEntrySchema),
 
   progressLog: Type.Array(ProgressEventSchema),
+
+  planArtifacts: Type.Optional(PlanArtifactsSchema),
 
   startedAt: Type.String(),
   completedAt: Type.Optional(Type.String()),
