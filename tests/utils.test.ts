@@ -152,7 +152,7 @@ describe("buildThemedProgressBar", () => {
       mockTheme,
     );
     expect(bar.percentage).toBe(0);
-    expect(bar.plain).toBe("───");
+    expect(bar.plain).toBe("---");
   });
 
   it("returns 100% for all done phases", () => {
@@ -161,7 +161,7 @@ describe("buildThemedProgressBar", () => {
       mockTheme,
     );
     expect(bar.percentage).toBe(100);
-    expect(bar.plain).toBe("━━━");
+    expect(bar.plain).toBe("===");
   });
 
   it("shows correct characters per status", () => {
@@ -169,7 +169,7 @@ describe("buildThemedProgressBar", () => {
       [phase("A", "done"), phase("B", "active"), phase("C", "pending"), phase("D", "skipped")],
       mockTheme,
     );
-    expect(bar.plain).toBe("━╍─┄");
+    expect(bar.plain).toBe("=~-.");
     expect(bar.percentage).toBe(25);
   });
 

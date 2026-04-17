@@ -33,11 +33,11 @@ let animator: AgentAnimator | null = null;
 /**
  * Build a themed retro-style progress bar.
  *
- * Uses retro line characters:
- *   done    → ━ (heavy horizontal, success color)
- *   active  → ╍ (heavy double dash, accent color)
- *   pending → ─ (light horizontal, muted color)
- *   skipped → ┄ (dotted, dim color)
+ * Uses ASCII characters:
+ *   done    → = (equals, success color)
+ *   active  → ~ (tilde, accent color)
+ *   pending → - (dash, muted color)
+ *   skipped → . (dot, dim color)
  *
  * Returns an object with the bar string segments (for themed coloring)
  * and a plain-text version.
@@ -53,14 +53,14 @@ export function buildThemedProgressBar(
   const segments = phases.map((p) => {
     switch (p.status) {
       case "done":
-        return { char: "━", color: "success" };
+        return { char: "=", color: "success" };
       case "active":
-        return { char: "╍", color: "accent" };
+        return { char: "~", color: "accent" };
       case "skipped":
-        return { char: "┄", color: "dim" };
+        return { char: ".", color: "dim" };
       case "pending":
       default:
-        return { char: "─", color: "muted" };
+        return { char: "-", color: "muted" };
     }
   });
 

@@ -65,8 +65,8 @@ describe("special states", () => {
       expect(full.length).toBe(9);
       expect(compact.length).toBe(3);
       // Completed should contain star eyes
-      expect(full.some((l) => l.includes("* *"))).toBe(true);
-      expect(compact.some((l) => l.includes("* *"))).toBe(true);
+      expect(full.some((l) => l.includes("★  ★"))).toBe(true);
+      expect(compact.some((l) => l.includes("★ ★"))).toBe(true);
     }
   });
 
